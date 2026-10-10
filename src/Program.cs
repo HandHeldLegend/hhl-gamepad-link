@@ -132,12 +132,14 @@ void DrawCard(PadEntry e)
     {
         bool live = session!.State == SessionState.Open;
         status = live ? "Open here" : session.Status;
-        colour = NativeUi.Status.OpenHere;
+        colour = session.Problem != null ? NativeUi.Status.Problem : NativeUi.Status.OpenHere;
         button = "Close";
         accent = false;
-        detail = live
-            ? $"{mode}  ·  {session.PacketsPerSecond}/s in, {session.ReportsPerSecond} Hz out  ·  " +
-              $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late  ·  {session.RttMs:F1} ms"
+        string port = session.AdapterPort is int n ? $"  ·  adapter port {n}" : "";
+        detail = session.Problem != null ? $"{mode}  ·  {session.Problem}"
+            : live ? $"{mode}{port}  ·  {session.PacketsPerSecond}/s in" +
+                     (session.AdapterPort == null ? $", {session.ReportsPerSecond} Hz out" : "") + "  ·  " +
+                     $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late  ·  {session.RttMs:F1} ms"
             : $"{mode}  ·  {e.Pad.Rssi} dBm";
     }
     else if (elsewhere)

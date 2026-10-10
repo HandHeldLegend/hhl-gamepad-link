@@ -387,14 +387,19 @@ extern "C" int ui_pad_card(const char *id, const char *name, const char *detail,
     dl->AddRectFilled(start, ImVec2(start.x + width, start.y + height), kCard, 12 * g_scale);
     dl->AddRect(start, ImVec2(start.x + width, start.y + height), kCardBorder, 12 * g_scale);
 
-    // Button on the right, the status to its left
+    // Button on the right, the status to its left: at most 40% of the card, cut short past that
     const float bx = start.x + width - pad - bsize.x;
-    const ImVec2 ssize = ImGui::CalcTextSize(status);
+    const float status_full = ImGui::CalcTextSize(status).x;
+    const float status_w = ImMin(status_full, width * 0.4f);
     const float dot = 4.5f * g_scale;
-    const float sx = bx - 18 * g_scale - ssize.x;
+    const float sx = bx - 18 * g_scale - status_w;
     const float sy = row_y + (bsize.y - line) * 0.5f;
     dl->AddCircleFilled(ImVec2(sx - dot * 2.2f, sy + line * 0.5f), dot, kStatus[status_color & 3]);
-    dl->AddText(ImVec2(sx, sy), status_color == 2 ? kTextDim : kText, status);
+    ImGui::PushStyleColor(ImGuiCol_Text, status_color == 2 ? kTextDim : kText);
+    ImGui::RenderTextEllipsis(dl, ImVec2(sx, sy), ImVec2(sx + status_w, sy + line), sx + status_w, status, nullptr, nullptr);
+    ImGui::PopStyleColor();
+    if (status_full > status_w && ImGui::IsMouseHoveringRect(ImVec2(sx, sy), ImVec2(sx + status_w, sy + line)))
+        ImGui::SetTooltip("%s", status);
 
     // Name and signal bars on the left, clear of the status
     const float name_max = sx - dot * 4 - 20 * g_scale - 24 * g_scale; // Room for the bars
@@ -424,6 +429,8 @@ extern "C" int ui_pad_card(const char *id, const char *name, const char *detail,
         ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
         ImGui::RenderTextEllipsis(dl, ImVec2(x0, detail_y), ImVec2(x1, detail_y + line), x1, detail, nullptr, nullptr);
         ImGui::PopStyleColor();
+        if (ImGui::CalcTextSize(detail).x > x1 - x0 && ImGui::IsMouseHoveringRect(ImVec2(x0, detail_y), ImVec2(x1, detail_y + line)))
+            ImGui::SetTooltip("%s", detail);
     }
 
     ImGui::SetCursorScreenPos(ImVec2(bx, row_y));

@@ -38,7 +38,8 @@ sealed class PadSession
     public Beacon Pad { get; private set; }
     public EndPoint Address { get; private set; }
     public SessionState State { get; private set; } = SessionState.Opening;
-    public string Status { get; private set; } = "Opening…";
+    public string Status { get; private set; } = "Opening…"; // A few words: it fits beside the button
+    public string? Problem { get; private set; }               // Why it couldn't open, for the details line
     public CloseReason Reason { get; private set; } = CloseReason.None;
 
     int _rateHz;
@@ -83,6 +84,7 @@ sealed class PadSession
     public int PacketsPerSecond { get; private set; }
     public int ReportsPerSecond { get; private set; }
     public double RttMs { get; private set; }
+    public int? AdapterPort => _gcPort?.Number;
     public double BufferMs => Timing.DelayUs / 1000.0;
     public double LatePercent => Timing.LateShare * 100;
 
@@ -154,7 +156,7 @@ sealed class PadSession
         else if (packet.Format == Protocol.FormatSlippi)
             OnSlippi(packet);
         else
-            Status = $"{Protocol.FormatName(packet.Format)} mode isn't supported over the LAN yet";
+            Fail("Can't open", $"{Protocol.FormatName(packet.Format)} mode isn't supported over WLAN yet");
     }
 
     void OnXInput(in DataPacket packet)
@@ -208,7 +210,10 @@ sealed class PadSession
         {
             _deviceFormat = Protocol.FormatSlippi;
             _gcPort = _adapter.Join(Pad.Id, QueueOutput);
-            Status = _gcPort == null ? "All four GameCube adapter ports are in use" : "Creating the GameCube adapter…";
+            if (_gcPort == null)
+                Fail("No port free", "All four GameCube adapter ports are in use");
+            else
+                Status = "Creating the adapter…";
         }
         _gcPort?.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report);
     }
@@ -221,10 +226,16 @@ sealed class PadSession
         if (_gcPort.Ready && State != SessionState.Open)
         {
             State = SessionState.Open;
-            Status = $"Open on port {_gcPort.Number} of the GameCube adapter";
+            Problem = null;
         }
         else if (!_gcPort.Ready && _gcPort.Problem is string problem)
-            Status = problem;
+            Fail("Couldn't open", problem);
+    }
+
+    void Fail(string status, string problem)
+    {
+        Status = status;
+        Problem = problem;
     }
 
     // Called from the network thread every pass: keep it open, send outputs, notice silence
@@ -329,7 +340,7 @@ sealed class PadSession
             }
             catch (Exception e)
             {
-                Status = $"Couldn't create the controller: {e.Message}";
+                Fail("Couldn't open", $"Couldn't create the controller: {e.Message}");
                 return;
             }
 
@@ -370,6 +381,7 @@ sealed class PadSession
         _pumping = false;
         _gcPort?.Leave();
         _gcPort = null;
+        Problem = null;
         _features = null;
         _featuresAsked = false;
         _outputs.Clear();

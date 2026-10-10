@@ -320,3 +320,51 @@ index 05b151d..1fef953 100644
          Phase("joycpl");
  
          // The WUDFHost release-wait and the orphan drain below exist to
+diff --git a/sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs b/sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs
+index 81c4e6d..b2a2d41 100644
+--- a/sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs
++++ b/sdk/HIDMaestro.Core/Internal/HMLayoutLoader.cs
+@@ -92,6 +92,9 @@ public static class HMLayoutJsonOptions
+         opts.Converters.Add(new HMAxisJsonConverter());
+         opts.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
+         opts.Converters.Add(new HMLayoutJsonConverter());
++        // HOJA local build: compile-time metadata first (NativeAOT), reflection for anything else
++        opts.TypeInfoResolver = System.Text.Json.Serialization.Metadata.JsonTypeInfoResolver.Combine(
++            ProfileJsonContext.Default, new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver());
+         return opts;
+     }
+ }
+diff --git a/sdk/HIDMaestro.Core/Internal/ProfileJsonContext.cs b/sdk/HIDMaestro.Core/Internal/ProfileJsonContext.cs
+new file mode 100644
+index 0000000..30d4490
+--- /dev/null
++++ b/sdk/HIDMaestro.Core/Internal/ProfileJsonContext.cs
+@@ -0,0 +1,28 @@
++using System.Text.Json.Serialization;
++
++namespace HIDMaestro.Internal;
++
++/// <summary>HOJA local build: the profile schema's JSON metadata, generated at compile time, so the
++/// profile catalog also loads in a NativeAOT app, where reflection-based JSON has no code for the
++/// value-type properties and every profile would fail to parse. The layouts are listed because
++/// HMLayoutJsonConverter reads each kind as its own type.</summary>
++[JsonSerializable(typeof(ControllerProfile))]
++[JsonSerializable(typeof(HMUnspecifiedLayout))]
++[JsonSerializable(typeof(HMGamepadLayout))]
++[JsonSerializable(typeof(HMJoystickLayout))]
++[JsonSerializable(typeof(HMFlightStickLayout))]
++[JsonSerializable(typeof(HMHotasLayout))]
++[JsonSerializable(typeof(HMWheelLayout))]
++[JsonSerializable(typeof(HMPedalsLayout))]
++[JsonSerializable(typeof(HMShifterLayout))]
++[JsonSerializable(typeof(HMHandbrakeLayout))]
++[JsonSerializable(typeof(HMSingleAxisAccessoryLayout))]
++[JsonSerializable(typeof(HMArcadeStickLayout))]
++[JsonSerializable(typeof(HMDancePadLayout))]
++[JsonSerializable(typeof(HMGuitarLayout))]
++[JsonSerializable(typeof(HMMotionWandLayout))]
++[JsonSerializable(typeof(HMRemoteLayout))]
++[JsonSerializable(typeof(HMControllerAdapterLayout))]
++internal sealed partial class ProfileJsonContext : JsonSerializerContext
++{
++}
