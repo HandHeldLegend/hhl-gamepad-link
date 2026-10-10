@@ -81,12 +81,9 @@ sealed class GcAdapter : IDisposable
     // A port's controller at rest: its status, nothing pressed, sticks centred, triggers released
     static byte[] Neutral(byte status) => new byte[] { status, 0, 0, 0x80, 0x80, 0x80, 0x80, 0, 0 };
 
-    static byte[] Empty()
-    {
-        var port = new byte[PortBytes];
-        port[0] = StatusEmpty;
-        return port;
-    }
+    // No controller. The input is a resting one, not zeros: Dolphin keeps reading a port during
+    // netplay, where it doesn't report the controller gone, and zeros are sticks held down-left
+    static byte[] Empty() => Neutral(StatusEmpty);
 
     // A port for this gamepad, or null when all four are taken
     public Port? Join(string padId, Action<byte[]> sendToGamepad)
