@@ -4,6 +4,8 @@
 // Each gamepad sends the report of an adapter with itself on port 1. Its port's 9 bytes (status and
 // input) go through its own playout buffer, and the adapter's clock builds one report from every
 // port's newest sample. Dolphin's rumble report has a byte per port, and each goes to its gamepad.
+// A port is unplugged the moment its gamepad closes. One that goes quiet first lets go of its
+// buttons and sticks, then unplugs, so a dropped gamepad never holds an input.
 //
 // The adapter is a USB device on the USB/IP transport (HIDMaestro's hhl-gamecube-adapter profile),
 // because Dolphin opens it through libusb. It comes up with the first gamepad and stays a while
@@ -22,6 +24,8 @@ sealed class GcAdapter : IDisposable
     const byte StatusEmpty = 0x04;         // Powered, no controller
     const long ReportPeriodUs = 1_000;     // 1000 Hz, as an overclocked adapter
     const long KeepWhenEmptyMs = 10_000;
+    const long QuietNeutralUs = 100_000;   // No input this long: buttons up, sticks centred
+    const long QuietUnplugUs = 1_000_000;  // No input this long: no controller on the port
     const string ProfileId = "hhl-gamecube-adapter";
     const string Identity = "hhl-wlan-gamecube-adapter";
 
@@ -30,6 +34,7 @@ sealed class GcAdapter : IDisposable
         internal readonly Playout<byte[]> Samples = new();
         internal byte[] Current = Empty();
         internal byte Rumble;
+        internal long LastInputUs = long.MinValue / 2; // When its newest input arrived
         internal readonly Action<byte[]> SendToGamepad;
         readonly GcAdapter _adapter;
 
@@ -50,7 +55,10 @@ sealed class GcAdapter : IDisposable
         public void Add(long arrivalUs, long sentUs, ReadOnlySpan<byte> report)
         {
             if (report.Length >= 1 + PortBytes && report[0] == ReportInput)
+            {
                 Samples.Add(arrivalUs, sentUs, report.Slice(1, PortBytes).ToArray());
+                Volatile.Write(ref LastInputUs, arrivalUs);
+            }
         }
 
         public void Leave() => _adapter.Leave(this);
@@ -69,6 +77,9 @@ sealed class GcAdapter : IDisposable
     long _emptySinceMs = -1;
 
     public GcAdapter(HMContext ctx) => _ctx = ctx;
+
+    // A port's controller at rest: its status, nothing pressed, sticks centred, triggers released
+    static byte[] Neutral(byte status) => new byte[] { status, 0, 0, 0x80, 0x80, 0x80, 0x80, 0, 0 };
 
     static byte[] Empty()
     {
@@ -236,7 +247,11 @@ sealed class GcAdapter : IDisposable
                         }
                         while (port.Samples.TryTakeDue(now, out var sample))
                             port.Current = sample;
-                        port.Current.CopyTo(report, 1 + i * PortBytes);
+                        long quiet = now - Volatile.Read(ref port.LastInputUs);
+                        var data = quiet >= QuietUnplugUs ? Empty()
+                                 : quiet >= QuietNeutralUs ? Neutral(port.Current[0])
+                                 : port.Current;
+                        data.CopyTo(report, 1 + i * PortBytes);
                     }
                 }
                 try { device.SubmitRawExtendedReport(report); }
