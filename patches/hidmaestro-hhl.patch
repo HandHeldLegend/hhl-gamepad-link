@@ -368,3 +368,18 @@ index 0000000..30d4490
 +internal sealed partial class ProfileJsonContext : JsonSerializerContext
 +{
 +}
+diff --git a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs
+index 35d708c..5f8eb87 100644
+--- a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs
++++ b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs
+@@ -885,7 +885,9 @@ internal static class UsbipDriverInstaller
+         var psi = new ProcessStartInfo
+         {
+             FileName = exePath,
+-            Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART",
++            // HOJA local build: the driver and its tools only, not the GUI, the SDK, a Start menu folder or
++            // a desktop shortcut
++            Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /COMPONENTS=\"main,client\" /TASKS=\"vcredist\" /NOICONS",
+             UseShellExecute = false,
+             CreateNoWindow = true,
+         };

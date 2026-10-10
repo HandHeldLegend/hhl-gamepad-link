@@ -3,8 +3,9 @@
 // Each packet carries the gamepad's clock when it was sampled. Arrival minus that is the clock
 // offset plus the trip; the smallest value of the last two seconds is the offset plus the quickest
 // trip, and following it also follows the two clocks drifting apart. A sample is played at its
-// gamepad time + offset + a small delay. Packets slower than the delay are late and dropped; the
-// delay grows while too many are and shrinks while almost none are.
+// gamepad time + offset + a small delay. A packet slower than the delay is late: it plays as soon
+// as it arrives, so it costs a little extra delay, never a lost input. The delay grows while too
+// many are late and shrinks while few are, so most packets play on time with a small buffer.
 
 namespace HhlGamepadWlan;
 
@@ -12,8 +13,8 @@ sealed class Playout<T>
 {
     const int Buckets = 20;            // 20 x 100 ms: the offset follows the last 2 s
     const long BucketUs = 100_000;
-    const long MinDelayUs = 1_000, MaxDelayUs = 20_000;
-    const double TooLate = 0.02, FewLate = 0.005; // Late share that grows / shrinks the delay
+    const long MinDelayUs = 500, MaxDelayUs = 20_000;
+    const double TooLate = 0.05, FewLate = 0.01; // Late share that grows / shrinks the delay
 
     readonly object _lock = new();
     readonly Queue<(long PlayAtUs, T Sample)> _queue = new();
@@ -26,7 +27,7 @@ sealed class Playout<T>
     int _onTime, _late;
     long _windowStartUs;
 
-    public long DelayUs { get; private set; } = 4_000;
+    public long DelayUs { get; private set; } = 2_000;
     public double LateShare { get; private set; }
 
     public void Add(long arrivalUs, long sentUs, T sample)
@@ -43,10 +44,11 @@ sealed class Playout<T>
             long playAt = sentUs + _offsetUs + DelayUs;
             if (playAt < arrivalUs)
             {
-                _late++; // Its slot has passed: the host keeps the previous sample
-                return;
+                _late++; // Its slot has passed: it plays now
+                playAt = arrivalUs;
             }
-            _onTime++;
+            else
+                _onTime++;
             _queue.Enqueue((playAt, sample));
         }
     }
@@ -114,7 +116,7 @@ sealed class Playout<T>
         if (LateShare > TooLate)
             DelayUs = Math.Min(MaxDelayUs, DelayUs + 1_000);
         else if (LateShare < FewLate)
-            DelayUs = Math.Max(MinDelayUs, DelayUs - 500);
+            DelayUs = Math.Max(MinDelayUs, DelayUs - 250);
 
         _onTime = _late = 0;
         _windowStartUs = nowUs;

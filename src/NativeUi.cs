@@ -31,8 +31,11 @@ static partial class NativeUi
     public static partial void Empty(string text);
 
     [LibraryImport(Lib, EntryPoint = "ui_footer", StringMarshalling = StringMarshalling.Utf8)]
-    private static partial int Footer(string message, string confirmText, ref int startWithWindows,
-                                      string updateText, int updateKind);
+    private static partial int Footer(string message, ref int startWithWindows, string updateText, int updateKind);
+
+    [LibraryImport(Lib, EntryPoint = "ui_drivers", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int DriversWindow(string[] names, string[] details, string[] states, int[] installed,
+                                             int[] busy, string[] removeWarnings, int count, string note);
 
     [LibraryImport(Lib, EntryPoint = "ui_hide_to_tray")]
     public static partial void HideToTray();
@@ -42,7 +45,10 @@ static partial class NativeUi
     public enum Frame { Closed = 0, Draw = 1, Hidden = 2 }
 
     [Flags]
-    public enum FooterAction { None = 0, RemoveDriver = 1, HideToTray = 2, StartWithWindowsChanged = 4, OpenUpdate = 8 }
+    public enum FooterAction { None = 0, OpenDrivers = 1, HideToTray = 2, StartWithWindowsChanged = 4, OpenUpdate = 8 }
+
+    // A row of the Drivers window
+    public sealed record DriverRow(string Name, string Detail, string State, bool Installed, bool Busy, string RemoveWarning);
 
     public static bool Open(string title, int width, int height, bool startHidden) =>
         Init(title, width, height, startHidden ? 1 : 0) != 0;
@@ -62,12 +68,22 @@ static partial class NativeUi
                             string button, bool accent) =>
         PadCard(id, name, detail, status, (int)colour, signalBars, button, accent ? 1 : 0) != 0;
 
-    public static FooterAction FooterBar(string message, string confirmText, ref bool startWithWindows,
-                                         Updates.State update, string updateText)
+    public static FooterAction FooterBar(string message, ref bool startWithWindows, Updates.State update, string updateText)
     {
         int start = startWithWindows ? 1 : 0;
-        var action = (FooterAction)Footer(message, confirmText, ref start, updateText, (int)update);
+        var action = (FooterAction)Footer(message, ref start, updateText, (int)update);
         startWithWindows = start != 0;
         return action;
+    }
+
+    // Draws the Drivers window while it is open. Returns the row whose Install or Remove was
+    // pressed, if any.
+    public static (int Row, bool Remove)? DriversWindow(IReadOnlyList<DriverRow> rows, string note)
+    {
+        int action = DriversWindow(rows.Select(r => r.Name).ToArray(), rows.Select(r => r.Detail).ToArray(),
+                                   rows.Select(r => r.State).ToArray(), rows.Select(r => r.Installed ? 1 : 0).ToArray(),
+                                   rows.Select(r => r.Busy ? 1 : 0).ToArray(), rows.Select(r => r.RemoveWarning).ToArray(),
+                                   rows.Count, note);
+        return action == 0 ? null : ((action - 1) / 2, (action - 1) % 2 == 1);
     }
 }

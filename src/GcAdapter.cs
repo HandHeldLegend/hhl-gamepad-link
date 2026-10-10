@@ -35,6 +35,7 @@ sealed class GcAdapter : IDisposable
 
         public int Number { get; }  // 1 to 4, as Dolphin numbers them
         public bool Ready => _adapter._device != null;
+        public bool Installing => _adapter._installing;
         public string? Problem => _adapter._problem;
         public Playout<byte[]> Playout => Samples;
 
@@ -63,6 +64,7 @@ sealed class GcAdapter : IDisposable
 
     volatile HMController? _device;
     volatile string? _problem;
+    volatile bool _installing;
     bool _creating;
     long _emptySinceMs = -1;
 
@@ -133,13 +135,18 @@ sealed class GcAdapter : IDisposable
             HMController? created = null;
             try
             {
-                // The first time on a PC this installs the USB/IP transport, and USB devices blink once
                 var profile = _ctx.GetProfile(ProfileId)
                     ?? throw new InvalidOperationException("this build has no GameCube adapter profile");
+
+                // The first time on a PC: the USB/IP transport, and USB devices blink once
+                _installing = !HMContext.IsUsbipBackendAvailable;
+                Drivers.EnsureUsbIp();
+                _installing = false;
                 created = _ctx.CreateController(profile, Identity);
             }
             catch (Exception e)
             {
+                _installing = false;
                 _problem = $"Couldn't create the GameCube adapter: {e.Message}";
             }
 
@@ -238,8 +245,10 @@ sealed class GcAdapter : IDisposable
         }) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "GameCube adapter" }.Start();
     }
 
-    // Remove the adapter and wait until it is gone: the app calls it when closing
-    public void Dispose()
+    public void Dispose() => RemoveNow();
+
+    // Remove the adapter and wait until it is gone: when the app closes, or a driver is removed
+    public void RemoveNow()
     {
         lock (_lock)
             RemoveDevice();

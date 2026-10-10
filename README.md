@@ -34,7 +34,7 @@ A gamepad that nobody opens turns itself off after 2 minutes. If an open gamepad
 
 ## Removing it
 
-Click **Remove driver** in the app's footer. This removes the virtual controllers, the driver and its certificate, and the Start with Windows task. Then delete the .exe.
+Untick **Start with Windows** and click **Drivers** in the app's footer. The Drivers window lists the two drivers the app uses: the virtual controller driver (HIDMaestro) and, if a gamepad in Slippi mode was ever opened, the USB/IP transport (usbip-win2). Remove each one, close the app, and delete the .exe.
 
 ## Building
 

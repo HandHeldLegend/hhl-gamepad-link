@@ -36,7 +36,8 @@ var driverReady = Task.Run(() =>
 });
 LanHub? hub = null;
 ConfigServer? config = null;
-bool removeDriver = false;
+var drivers = new Drivers(ctx, () => hub);
+drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask; // Installed from the Drivers window
 
 NativeUi.Frame frame;
 while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
@@ -75,17 +76,13 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
     string updateText = Updates.Status == Updates.State.Available
         ? $"Update available · v{Updates.Latest}"
         : $"Up to date · v{Updates.Current}";
-    var action = NativeUi.FooterBar(message,
-        "Remove the virtual controller driver and its certificate from this PC? Any open gamepads are " +
-        "closed. HHL Gamepad WLAN sets it up again the next time it runs.", ref startWithWindows,
-        Updates.Status, updateText);
+    var action = NativeUi.FooterBar(Drivers.Working ?? message, ref startWithWindows, Updates.Status, updateText);
+    if (action.HasFlag(NativeUi.FooterAction.OpenDrivers))
+        drivers.Refresh();
+    if (NativeUi.DriversWindow(drivers.Rows, drivers.Note) is var (row, remove))
+        drivers.Act((Drivers.Which)row, remove);
     NativeUi.End();
 
-    if (action.HasFlag(NativeUi.FooterAction.RemoveDriver))
-    {
-        removeDriver = true;
-        break;
-    }
     if (action.HasFlag(NativeUi.FooterAction.OpenUpdate))
         Updates.OpenReleasesPage();
     if (action.HasFlag(NativeUi.FooterAction.HideToTray))
@@ -103,8 +100,6 @@ NativeUi.Shutdown();
 config?.Dispose();
 hub?.Dispose();
 ctx.Dispose();
-if (removeDriver)
-    Cleanup.RemoveEverything();
 return 0;
 
 void DrawCard(PadEntry e)

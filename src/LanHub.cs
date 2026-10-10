@@ -222,6 +222,21 @@ sealed class LanHub : IDisposable
             _byAddress.Remove(gone);
     }
 
+    // Close every gamepad open here and wait until their devices are gone: before a driver is removed
+    public void CloseAll()
+    {
+        PadSession[] sessions;
+        lock (_lock)
+        {
+            sessions = _sessions.Values.ToArray();
+            foreach (var session in sessions)
+                session.Close("Closed", CloseReason.Closed);
+        }
+        foreach (var session in sessions)
+            session.WaitForDevices(TimeSpan.FromSeconds(30));
+        _adapter.RemoveNow();
+    }
+
     // Release everything this PC has open, and wait until its controllers are gone
     public void Dispose()
     {

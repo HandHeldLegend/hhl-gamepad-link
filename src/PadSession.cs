@@ -223,7 +223,9 @@ sealed class PadSession
     {
         if (_gcPort == null)
             return;
-        if (_gcPort.Ready && State != SessionState.Open)
+        if (_gcPort.Installing)
+            Status = "Installing USB/IP…";
+        else if (_gcPort.Ready && State != SessionState.Open)
         {
             State = SessionState.Open;
             Problem = null;

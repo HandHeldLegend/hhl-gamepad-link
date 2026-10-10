@@ -461,11 +461,12 @@ extern "C" void ui_empty(const char *text)
     ImGui::PopStyleColor();
 }
 
-// Footer: the message and the update badge, then "Start with Windows", "Hide to tray" and "Remove
-// driver" (which asks first). Returns a mask: 1 removal confirmed, 2 hide to tray, 4 "Start with
-// Windows" toggled (its new value in *start_with_windows), 8 the update badge clicked.
+// Footer: the message and the update badge, then "Start with Windows", "Hide to tray" and "Drivers"
+// (which opens the Drivers window, see ui_drivers). Returns a mask: 1 Drivers opened, 2 hide to
+// tray, 4 "Start with Windows" toggled (its new value in *start_with_windows), 8 the update badge
+// clicked.
 // update_kind: 0 no badge, 1 up to date, 2 update available.
-extern "C" int ui_footer(const char *message, const char *confirm_text, int *start_with_windows,
+extern "C" int ui_footer(const char *message, int *start_with_windows,
                          const char *update_text, int update_kind)
 {
     const ImGuiStyle &st = ImGui::GetStyle();
@@ -505,7 +506,7 @@ extern "C" int ui_footer(const char *message, const char *confirm_text, int *sta
     ImGui::PopStyleColor(3);
 
     const char *hide = "Hide to tray";
-    const char *label = "Remove driver";
+    const char *label = "Drivers";
     const float hide_w = ImGui::CalcTextSize(hide).x + st.FramePadding.x * 2;
     const float w = ImGui::CalcTextSize(label).x + st.FramePadding.x * 2;
     ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - w - st.ItemSpacing.x - hide_w);
@@ -515,30 +516,116 @@ extern "C" int ui_footer(const char *message, const char *confirm_text, int *sta
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
     if (ImGui::Button(label))
-        ImGui::OpenPopup("Remove driver?");
-    ImGui::PopStyleColor(2);
-
-    int confirmed = 0;
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal("Remove driver?", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
     {
-        ImGui::PushTextWrapPos(380 * g_scale);
-        ImGui::TextUnformatted(confirm_text);
-        ImGui::PopTextWrapPos();
-        ImGui::Dummy(ImVec2(0, 6 * g_scale));
-        ImGui::PushStyleColor(ImGuiCol_Button, kStatus[3]);
-        if (ImGui::Button("Remove"))
-        {
-            confirmed = 1;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        if (ImGui::Button("Keep"))
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+        ImGui::OpenPopup("Drivers");
+        result |= 1;
     }
-    return result | confirmed;
+    ImGui::PopStyleColor(2);
+    return result;
+}
+
+// The Drivers window, while it is open (the footer's Drivers button opens it): a row per driver
+// with what it is for, whether it is installed, and Install or Remove. Remove asks first, in its
+// row. busy[i] is 1 while that driver is being installed or removed. Returns 0, or 1 + row * 2
+// for Install and 2 + row * 2 for Remove.
+static int g_confirm_row = -1;
+
+extern "C" int ui_drivers(const char **names, const char **details, const char **states, const int *installed,
+                          const int *busy, const char **remove_warnings, int count, const char *note)
+{
+    int action = 0;
+    const ImGuiStyle &st = ImGui::GetStyle();
+    const float width = 440 * g_scale;
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(width + st.WindowPadding.x * 2, 0));
+    if (!ImGui::BeginPopupModal("Drivers", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
+    {
+        g_confirm_row = -1;
+        return 0;
+    }
+
+    bool any_busy = false;
+    for (int i = 0; i < count; i++)
+        any_busy |= busy[i] != 0;
+
+    for (int i = 0; i < count; i++)
+    {
+        ImGui::PushID(i);
+        if (i > 0)
+        {
+            ImGui::Dummy(ImVec2(0, 4 * g_scale));
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, 4 * g_scale));
+        }
+
+        // Name, and the button on the right of it
+        const bool confirming = g_confirm_row == i;
+        const char *button = installed[i] ? "Remove" : "Install";
+        const float bw = ImGui::CalcTextSize(confirming ? "Remove" : button).x + st.FramePadding.x * 2 + 8 * g_scale;
+        const float cancel_w = ImGui::CalcTextSize("Cancel").x + st.FramePadding.x * 2 + 8 * g_scale;
+        const float row_x = ImGui::GetCursorPosX();
+
+        ImGui::PushFont(g_font_bold, g_font_bold->LegacySize);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(names[i]);
+        ImGui::PopFont();
+
+        ImGui::SameLine(row_x + width - bw - (confirming ? cancel_w + st.ItemSpacing.x : 0));
+        ImGui::BeginDisabled(any_busy);
+        if (confirming)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, kStatus[3]);
+            if (ImGui::Button("Remove", ImVec2(bw, 0)))
+            {
+                action = 2 + i * 2;
+                g_confirm_row = -1;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(cancel_w, 0)))
+                g_confirm_row = -1;
+        }
+        else if (ImGui::Button(button, ImVec2(bw, 0)))
+        {
+            if (installed[i])
+                g_confirm_row = i;
+            else
+                action = 1 + i * 2;
+        }
+        ImGui::EndDisabled();
+
+        // What it is for, then its state (or, while confirming, what removing it does)
+        ImGui::PushTextWrapPos(row_x + width);
+        ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
+        ImGui::TextUnformatted(details[i]);
+        ImGui::PopStyleColor();
+        const ImU32 colour = busy[i] ? kAccent : installed[i] ? kStatus[0] : kTextDim;
+        ImGui::PushStyleColor(ImGuiCol_Text, confirming ? kStatus[3] : colour);
+        ImGui::TextUnformatted(confirming ? remove_warnings[i] : states[i]);
+        ImGui::PopStyleColor();
+        ImGui::PopTextWrapPos();
+        ImGui::PopID();
+    }
+
+    ImGui::Dummy(ImVec2(0, 8 * g_scale));
+    if (note && note[0])
+    {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+        ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
+        ImGui::TextUnformatted(note);
+        ImGui::PopStyleColor();
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 4 * g_scale));
+    }
+    const float close_w = ImGui::CalcTextSize("Close").x + st.FramePadding.x * 2 + 8 * g_scale;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + width - close_w);
+    if (ImGui::Button("Close", ImVec2(close_w, 0)))
+    {
+        g_confirm_row = -1;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+    return action;
 }
 
 extern "C" void ui_hide_to_tray()
