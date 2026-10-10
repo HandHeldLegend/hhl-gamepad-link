@@ -28,13 +28,14 @@ static class Protocol
 
     // core_reportformat_t on the gamepad
     public const byte FormatXInput = 1;
+    public const byte FormatSlippi = 2;
     public const byte FormatSInput = 6;
 
     public static string FormatName(byte format) => format switch
     {
         0 => "Switch",
         FormatXInput => "XInput",
-        2 => "Slippi",
+        FormatSlippi => "Slippi",
         3 => "GameCube",
         4 => "N64",
         5 => "SNES",

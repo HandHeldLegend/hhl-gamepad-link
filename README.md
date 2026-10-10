@@ -2,7 +2,7 @@
 
 # HHL Gamepad WLAN
 
-Play wirelessly on a Windows PC with a HOJA gamepad over your home network. You don't need a dongle. The gamepad joins your WLAN, and this app turns it into a real controller on the PC, in the mode the gamepad is set to (SInput or XInput). Steam and games see it like any other wired controller.
+Play wirelessly on a Windows PC with a HOJA gamepad over your home network. You don't need a dongle. The gamepad joins your WLAN, and this app turns it into a real controller on the PC, in the mode the gamepad is set to (SInput, XInput or Slippi). Steam and games see it like any other wired controller, and Dolphin sees gamepads in Slippi mode as a GameCube adapter.
 
 - **One portable .exe.** There's no installer, and it keeps no config files or registry settings of its own.
 - **Several gamepads and several PCs.** Every gamepad on the network shows up in the list. Open one to use it here, or claim one that another PC is using.
@@ -23,6 +23,12 @@ The app asks for administrator rights. It needs them to install the virtual cont
 1. Connect the gamepad over USB in [HHL Gamepad Config](https://handheldlegend.github.io/hoja3/).
 2. Under **Wireless → Home WLAN**, enter your network's name and password, then save. The password can't be read back from the gamepad.
 3. Start the gamepad in wireless mode. If no HOJA dongle is nearby, it joins your home network, and it appears in HHL Gamepad WLAN within a few seconds.
+
+## Slippi and Dolphin
+
+Gamepads in Slippi mode share one virtual GameCube Controller Adapter, the Wii U adapter Dolphin and Slippi read. Each gamepad you open gets a port of its own, in the order you open them. A gamepad that drops out and comes back gets its old port back. Up to four fit. Rumble from Dolphin goes to the gamepad on that port.
+
+In Dolphin, set the ports to **GameCube Adapter for Wii U**. No Zadig or driver setup is needed. The first time a gamepad in Slippi mode is opened on a PC, the app installs [usbip-win2](https://github.com/vadimgrn/usbip-win2), the signed USB/IP transport the adapter runs on, and your USB devices disconnect for a moment while it does.
 
 A gamepad that nobody opens turns itself off after 2 minutes. If an open gamepad's PC goes away, it turns off after 30 seconds.
 

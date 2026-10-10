@@ -15,6 +15,7 @@ sealed class LanHub : IDisposable
     const double ForgetAfterSeconds = 5; // No beacon for this long: off or out of range
 
     readonly HMContext _ctx;
+    readonly GcAdapter _adapter;
     readonly Socket _socket;
     readonly Thread _thread;
     volatile bool _running = true;
@@ -31,6 +32,7 @@ sealed class LanHub : IDisposable
     public LanHub(HMContext ctx, int rateHz)
     {
         _ctx = ctx;
+        _adapter = new GcAdapter(ctx);
         RateHz = rateHz;
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp) { EnableBroadcast = true };
         _socket.Bind(new IPEndPoint(IPAddress.Any, Protocol.PcPort));
@@ -65,7 +67,7 @@ sealed class LanHub : IDisposable
                 return;
             if (_sessions.TryGetValue(id, out var existing) && existing.State != SessionState.Closed)
                 return;
-            var session = new PadSession(_ctx, pad.Pad, pad.Address, Session, PcName, RateHz, Send);
+            var session = new PadSession(_ctx, _adapter, pad.Pad, pad.Address, Session, PcName, RateHz, Send);
             _sessions[id] = session;
             _byAddress[((IPEndPoint)pad.Address).Address] = session;
         }
@@ -139,6 +141,7 @@ sealed class LanHub : IDisposable
                 foreach (var session in _sessions.Values)
                     session.Tick();
                 DropSilent();
+                _adapter.Tick();
             }
         }
     }
@@ -235,5 +238,6 @@ sealed class LanHub : IDisposable
 
         foreach (var session in sessions)
             session.WaitForDevices(TimeSpan.FromSeconds(30));
+        _adapter.Dispose();
     }
 }

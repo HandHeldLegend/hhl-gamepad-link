@@ -1,5 +1,6 @@
 // One gamepad opened on this PC: keeps it open, presents it as the device for its mode, and plays
-// its samples to that device at the spacing the gamepad took them (see Playout).
+// its samples to that device at the spacing the gamepad took them (see Playout). In Slippi mode the
+// device is a port on the GameCube adapter that every Slippi gamepad here shares (see GcAdapter).
 //
 // Threads: the network thread calls OnData and Tick; HIDMaestro raises output reports on its own
 // thread (they are only queued); the report clock submits to the device; creating and removing the
@@ -28,6 +29,7 @@ sealed class PadSession
     const long ReplyHoldMs = 20;
 
     readonly HMContext _ctx;
+    readonly GcAdapter _adapter;
     readonly Action<byte[], EndPoint> _send;
     readonly uint _session;
     readonly string _pcName;
@@ -50,6 +52,7 @@ sealed class PadSession
     readonly Playout<byte[]> _sinput = new();
     readonly Playout<HMGamepadState> _xinput = new();
     readonly ConcurrentQueue<byte[]> _oneShots = new();
+    GcAdapter.Port? _gcPort;
     Thread? _pump;
     volatile bool _pumping;
 
@@ -80,13 +83,21 @@ sealed class PadSession
     public int PacketsPerSecond { get; private set; }
     public int ReportsPerSecond { get; private set; }
     public double RttMs { get; private set; }
-    public double BufferMs => (_deviceFormat == Protocol.FormatXInput ? _xinput.DelayUs : _sinput.DelayUs) / 1000.0;
-    public double LatePercent => (_deviceFormat == Protocol.FormatXInput ? _xinput.LateShare : _sinput.LateShare) * 100;
+    public double BufferMs => Timing.DelayUs / 1000.0;
+    public double LatePercent => Timing.LateShare * 100;
 
-    public PadSession(HMContext ctx, Beacon pad, EndPoint address, uint session, string pcName, int rateHz,
-                      Action<byte[], EndPoint> send)
+    (long DelayUs, double LateShare) Timing => _deviceFormat switch
+    {
+        Protocol.FormatXInput => (_xinput.DelayUs, _xinput.LateShare),
+        Protocol.FormatSlippi when _gcPort != null => (_gcPort.Playout.DelayUs, _gcPort.Playout.LateShare),
+        _ => (_sinput.DelayUs, _sinput.LateShare),
+    };
+
+    public PadSession(HMContext ctx, GcAdapter adapter, Beacon pad, EndPoint address, uint session, string pcName,
+                      int rateHz, Action<byte[], EndPoint> send)
     {
         _ctx = ctx;
+        _adapter = adapter;
         Pad = pad;
         Address = address;
         _session = session;
@@ -140,6 +151,8 @@ sealed class PadSession
             OnXInput(packet);
         else if (packet.Format == Protocol.FormatSInput)
             OnSInput(packet);
+        else if (packet.Format == Protocol.FormatSlippi)
+            OnSlippi(packet);
         else
             Status = $"{Protocol.FormatName(packet.Format)} mode isn't supported over the LAN yet";
     }
@@ -189,6 +202,31 @@ sealed class PadSession
         }
     }
 
+    void OnSlippi(in DataPacket packet)
+    {
+        if (_deviceFormat == 0xFF)
+        {
+            _deviceFormat = Protocol.FormatSlippi;
+            _gcPort = _adapter.Join(Pad.Id, QueueOutput);
+            Status = _gcPort == null ? "All four GameCube adapter ports are in use" : "Creating the GameCube adapter…";
+        }
+        _gcPort?.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report);
+    }
+
+    // A port on the adapter is open once the adapter is there
+    void UpdateSlippiStatus()
+    {
+        if (_gcPort == null)
+            return;
+        if (_gcPort.Ready && State != SessionState.Open)
+        {
+            State = SessionState.Open;
+            Status = $"Open on port {_gcPort.Number} of the GameCube adapter";
+        }
+        else if (!_gcPort.Ready && _gcPort.Problem is string problem)
+            Status = problem;
+    }
+
     // Called from the network thread every pass: keep it open, send outputs, notice silence
     public void Tick()
     {
@@ -230,6 +268,7 @@ sealed class PadSession
             _lastOutSent = now;
         }
 
+        UpdateSlippiStatus();
         if (now - _rateWindowStart >= 1000)
         {
             PacketsPerSecond = _packets;
@@ -329,6 +368,8 @@ sealed class PadSession
             _oneShots.Clear();
         }
         _pumping = false;
+        _gcPort?.Leave();
+        _gcPort = null;
         _features = null;
         _featuresAsked = false;
         _outputs.Clear();
