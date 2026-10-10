@@ -1,0 +1,3 @@
+[submodule "external/HIDMaestro"]
+	path = external/HIDMaestro
+	url = https://github.com/hifihedgehog/HIDMaestro.git

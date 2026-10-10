@@ -1,0 +1,7 @@
+# Build tools fetched by scripts/fetch-tools.ps1, and build output
+.tools/
+build/
+bin/
+obj/
+*.user
+.vs/

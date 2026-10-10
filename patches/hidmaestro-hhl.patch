@@ -1,0 +1,288 @@
+diff --git a/scripts/build.cmd b/scripts/build.cmd
+index 1ebe5b1..22906e9 100644
+--- a/scripts/build.cmd
++++ b/scripts/build.cmd
+@@ -33,8 +33,8 @@ echo Compiling %DRIVER_NAME%.dll ...
+ 
+ set "UM_INC=%WDK%\Include\%WDK_VER%\um"
+ set "SHARED_INC=%WDK%\Include\%WDK_VER%\shared"
+-set "KM_INC=%WDK%\Include\%WDK_VER%\km"
+-set "WDF_INC=%WDK%\Include\wdf\umdf\%UMDF_VER%"
++set "KM_INC=%HM_WDK_ROOT%\Include\%WDK_VER%\km"
++set "WDF_INC=%HM_WDK_ROOT%\Include\wdf\umdf\%UMDF_VER%"
+ 
+ cl.exe /nologo /W4 /GS /Gz /wd4324 ^
+     /D %HM_ARCH_DEFINE% /D _WIN64 /D UNICODE /D _UNICODE ^
+@@ -63,7 +63,7 @@ if errorlevel 1 (
+ echo Linking %DRIVER_NAME%.dll ...
+ 
+ set "UM_LIB=%WDK%\Lib\%WDK_VER%\um\%HM_ARCH%"
+-set "WDF_LIB=%WDK%\Lib\wdf\umdf\%HM_ARCH%\%UMDF_VER%"
++set "WDF_LIB=%HM_WDK_ROOT%\Lib\wdf\umdf\%HM_ARCH%\%UMDF_VER%"
+ 
+ link.exe /nologo /DLL /MACHINE:%HM_ARCH% ^
+     "/OUT:%OUT_DIR%\%DRIVER_NAME%.dll" ^
+diff --git a/scripts/build_companion.cmd b/scripts/build_companion.cmd
+index 80ba11a..0d69931 100644
+--- a/scripts/build_companion.cmd
++++ b/scripts/build_companion.cmd
+@@ -14,7 +14,7 @@ cl.exe /nologo /W4 /GS /Gz /wd4324 ^
+     /D %HM_ARCH_DEFINE% /D _WIN64 /D UNICODE /D _UNICODE ^
+     /D UMDF_VERSION_MAJOR=2 /D UMDF_VERSION_MINOR=15 ^
+     "/I%WDK%\Include\%WDK_VER%\um" "/I%WDK%\Include\%WDK_VER%\shared" ^
+-    "/I%WDK%\Include\%WDK_VER%\km" "/I%WDK%\Include\wdf\umdf\%UMDF_VER%" ^
++    "/I%HM_WDK_ROOT%\Include\%WDK_VER%\km" "/I%HM_WDK_ROOT%\Include\wdf\umdf\%UMDF_VER%" ^
+     "/Fo%OUT_DIR%\\" /c "%DRIVER_DIR%\companion.c"
+ if errorlevel 1 (echo COMPILE FAILED & exit /b 1)
+ 
+@@ -24,7 +24,7 @@ if errorlevel 1 (echo COMPILE FAILED & exit /b 1)
+ if errorlevel 1 (echo RESOURCE COMPILE FAILED & exit /b 1)
+ 
+ link.exe /nologo /DLL /MACHINE:%HM_ARCH% "/OUT:%OUT_DIR%\HIDMaestroCompanion.dll" ^
+-    "/LIBPATH:%WDK%\Lib\%WDK_VER%\um\%HM_ARCH%" "/LIBPATH:%WDK%\Lib\wdf\umdf\%HM_ARCH%\%UMDF_VER%" ^
++    "/LIBPATH:%WDK%\Lib\%WDK_VER%\um\%HM_ARCH%" "/LIBPATH:%HM_WDK_ROOT%\Lib\wdf\umdf\%HM_ARCH%\%UMDF_VER%" ^
+     "%OUT_DIR%\companion.obj" "%OUT_DIR%\res_companion.res" WdfDriverStubUm.lib ntdll.lib OneCoreUAP.lib mincore.lib advapi32.lib
+ if errorlevel 1 (echo LINK FAILED & exit /b 1)
+ 
+diff --git a/scripts/native_env.cmd b/scripts/native_env.cmd
+index 33c28af..d4d7919 100644
+--- a/scripts/native_env.cmd
++++ b/scripts/native_env.cmd
+@@ -8,6 +8,8 @@ if /i "%HM_ARCH%"=="x64" (set "HM_ARCH=x64") else if /i "%HM_ARCH%"=="arm64" (se
+ )
+ 
+ set "WDK=C:\Program Files (x86)\Windows Kits\10"
++:: Kernel-mode and WDF pieces can come from an unpacked WDK NuGet package
++if not defined HM_WDK_ROOT set "HM_WDK_ROOT=%WDK%"
+ if not defined HM_WDK_VERSION set "HM_WDK_VERSION=10.0.26100.0"
+ set "WDK_VER=%HM_WDK_VERSION%"
+ set "UMDF_VER=2.15"
+diff --git a/sdk/HIDMaestro.Core/HIDMaestro.Core.csproj b/sdk/HIDMaestro.Core/HIDMaestro.Core.csproj
+index b422516..af43380 100644
+--- a/sdk/HIDMaestro.Core/HIDMaestro.Core.csproj
++++ b/sdk/HIDMaestro.Core/HIDMaestro.Core.csproj
+@@ -27,6 +27,7 @@
+     <HMRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))</HMRepoRoot>
+     <HMBuildDir>$(HMRepoRoot)build\</HMBuildDir>
+     <HMWdkBin>C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\</HMWdkBin>
++    <HMInf2catBin Condition="'$(HMInf2catBin)' == ''">$(HMWdkBin)</HMInf2catBin>
+   </PropertyGroup>
+ 
+   <!-- Pre-build: refresh embedded payload from build/ and the local WDK install.
+@@ -73,14 +74,14 @@
+            apivalidator.exe / microsoft.kits.drivers.apivalidator.dll /
+            Microsoft.Extensions.CommandLineUtils.dll were tested and are NOT
+            required for /os:10_X64 catalog generation. -->
+-      <_HMInf2cat Include="$(HMWdkBin)x86\Inf2Cat.exe" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\inf2cat.exe.manifest" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\WindowsProtectedFiles.xml" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\Microsoft.UniversalStore.HardwareWorkflow.Cabinets.dll" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\Microsoft.UniversalStore.HardwareWorkflow.Catalogs.dll" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\Microsoft.UniversalStore.HardwareWorkflow.InfReader.dll" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\Microsoft.UniversalStore.HardwareWorkflow.SubmissionBuilder.dll" />
+-      <_HMInf2cat Include="$(HMWdkBin)x86\Microsoft.Kits.Logger.dll" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\Inf2Cat.exe" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\inf2cat.exe.manifest" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\WindowsProtectedFiles.xml" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\Microsoft.UniversalStore.HardwareWorkflow.Cabinets.dll" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\Microsoft.UniversalStore.HardwareWorkflow.Catalogs.dll" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\Microsoft.UniversalStore.HardwareWorkflow.InfReader.dll" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\Microsoft.UniversalStore.HardwareWorkflow.SubmissionBuilder.dll" />
++      <_HMInf2cat Include="$(HMInf2catBin)x86\Microsoft.Kits.Logger.dll" />
+       <!-- One payload set per target architecture. Driver, XUSB
+            companion, SWD helper, both stamped INFs and the signing
+            tool tree all differ by architecture, and the machine that
+@@ -91,11 +92,11 @@
+ 
+     <Error Condition="!Exists('$(HMBuildDir)HIDMaestro.dll')"
+            Text="No x64 driver in $(HMBuildDir). Run scripts\build_all.cmd, which builds both architectures before this project." />
+-    <Error Condition="!Exists('$(HMBuildDir)arm64\HIDMaestro.dll')"
++    <Error Condition="'$(HMSkipArm64)' != 'true' And !Exists('$(HMBuildDir)arm64\HIDMaestro.dll')"
+            Text="No ARM64 driver in $(HMBuildDir)arm64\. Run scripts\build_all.cmd, which builds both architectures before this project." />
+ 
+     <Copy SourceFiles="@(_HMX64File)" DestinationFolder="$(MSBuildThisFileDirectory)Resources\x64\" SkipUnchangedFiles="true" />
+-    <Copy SourceFiles="@(_HMArm64File)" DestinationFolder="$(MSBuildThisFileDirectory)Resources\arm64\" SkipUnchangedFiles="true" />
++    <Copy SourceFiles="@(_HMArm64File)" DestinationFolder="$(MSBuildThisFileDirectory)Resources\arm64\" SkipUnchangedFiles="true" Condition="'$(HMSkipArm64)' != 'true'" />
+     <Copy SourceFiles="@(_HMVrFiles)" DestinationFiles="@(_HMVrFiles->'$(MSBuildThisFileDirectory)Resources\vr\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="'@(_HMVrFiles)' != ''" />
+     <Copy SourceFiles="@(_HMInf2cat)"    DestinationFolder="$(MSBuildThisFileDirectory)Resources\" SkipUnchangedFiles="true" />
+ 
+@@ -127,12 +128,12 @@
+                   DestinationFolder="$(MSBuildThisFileDirectory)Resources"
+                   DestinationFileName="$(HMUsbipAsset)"
+                   SkipUnchangedFiles="true"
+-                  Condition="!Exists('$(HMUsbipFile)')" />
++                  Condition="'$(HMSkipUsbip)' != 'true' And !Exists('$(HMUsbipFile)')" />
+ 
+-    <GetFileHash Files="$(HMUsbipFile)" Algorithm="SHA256">
++    <GetFileHash Files="$(HMUsbipFile)" Algorithm="SHA256" Condition="'$(HMSkipUsbip)' != 'true'">
+       <Output TaskParameter="Hash" PropertyName="_HMUsbipActualHash" />
+     </GetFileHash>
+-    <Error Condition="'$(_HMUsbipActualHash.ToLowerInvariant())' != '$(HMUsbipSha256)'"
++    <Error Condition="'$(HMSkipUsbip)' != 'true' And '$(_HMUsbipActualHash.ToLowerInvariant())' != '$(HMUsbipSha256)'"
+            Text="usbip-win2 installer hash mismatch. Expected $(HMUsbipSha256), got $(_HMUsbipActualHash). Delete $(HMUsbipFile) and rebuild to re-fetch." />
+ 
+     <!-- ARM64 transport. The 0.9.8.1 release page carries the x64
+@@ -143,12 +144,12 @@
+                   DestinationFolder="$(MSBuildThisFileDirectory)Resources"
+                   DestinationFileName="$(HMUsbipArmAsset)"
+                   SkipUnchangedFiles="true"
+-                  Condition="!Exists('$(HMUsbipArmFile)')" />
++                  Condition="'$(HMSkipUsbip)' != 'true' And !Exists('$(HMUsbipArmFile)')" />
+ 
+-    <GetFileHash Files="$(HMUsbipArmFile)" Algorithm="SHA256">
++    <GetFileHash Files="$(HMUsbipArmFile)" Algorithm="SHA256" Condition="'$(HMSkipUsbip)' != 'true'">
+       <Output TaskParameter="Hash" PropertyName="_HMUsbipArmActualHash" />
+     </GetFileHash>
+-    <Error Condition="'$(_HMUsbipArmActualHash.ToLowerInvariant())' != '$(HMUsbipArmSha256)'"
++    <Error Condition="'$(HMSkipUsbip)' != 'true' And '$(_HMUsbipArmActualHash.ToLowerInvariant())' != '$(HMUsbipArmSha256)'"
+            Text="usbip-win2 ARM64 installer hash mismatch. Expected $(HMUsbipArmSha256), got $(_HMUsbipArmActualHash). Delete $(HMUsbipArmFile) and rebuild to re-fetch." />
+ 
+     <!-- The host controller's own INF/SYS/CAT, unpacked from the verified
+@@ -157,7 +158,7 @@
+          transport an earlier release installed through PnP, which the
+          installer cannot do without launching the old version's
+          uninstaller. -->
+-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(HMRepoRoot)scripts\prepare_usbip.ps1&quot; -InstallerDirectory &quot;$(MSBuildThisFileDirectory)Resources&quot; -DestinationDirectory &quot;$(MSBuildThisFileDirectory)Resources\usbip&quot;" />
++    <Exec Condition="'$(HMSkipUsbip)' != 'true'" Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(HMRepoRoot)scripts\prepare_usbip.ps1&quot; -InstallerDirectory &quot;$(MSBuildThisFileDirectory)Resources&quot; -DestinationDirectory &quot;$(MSBuildThisFileDirectory)Resources\usbip&quot;" />
+ 
+     <Copy SourceFiles="$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.txt"
+           DestinationFolder="$(MSBuildThisFileDirectory)Resources\" SkipUnchangedFiles="true" />
+diff --git a/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs b/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs
+index 05b151d..1fef953 100644
+--- a/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs
++++ b/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs
+@@ -56,6 +56,9 @@ internal static class DeviceOrchestrator
+     internal static bool DiagEnabled => s_diagEnabled;
+     private static StreamWriter? s_diagWriter;
+ 
++    // HOJA local build: off (see the launch sweep)
++    static readonly bool WipeJoyCplCache = false;
++
+     internal static void LogDiag(string message)
+     {
+         if (!s_diagEnabled) return;
+@@ -2428,67 +2431,73 @@ internal static class DeviceOrchestrator
+ 
+         Phase("interface-classes");
+ 
+-        // Clean joy.cpl joystick OEM cache + slot assignments
+-        string[] oemPrefixes = { "VID_045E&PID_", "VID_054C&PID_", "VID_0000&PID_" };
+-        string oemRelPath = @"System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM";
+-        foreach (var root in new[] { Registry.CurrentUser, Registry.LocalMachine })
++        // HOJA local build: leave joy.cpl's cache alone. It is keyed by VID:PID only, so wiping it
++        // also resets the names, slots and calibration of real Microsoft and Sony controllers, and it
++        // edits the user's registry on every launch.
++        if (WipeJoyCplCache)
+         {
+-            try
++            // Clean joy.cpl joystick OEM cache + slot assignments
++            string[] oemPrefixes = { "VID_045E&PID_", "VID_054C&PID_", "VID_0000&PID_" };
++            string oemRelPath = @"System\CurrentControlSet\Control\MediaProperties\PrivateProperties\Joystick\OEM";
++            foreach (var root in new[] { Registry.CurrentUser, Registry.LocalMachine })
+             {
+-                using var oemKey = root.OpenSubKey(oemRelPath, writable: true);
+-                if (oemKey != null)
+-                    foreach (var sub in oemKey.GetSubKeyNames())
+-                        if (oemPrefixes.Any(p => sub.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+-                            try { oemKey.DeleteSubKeyTree(sub, false); } catch { }
+-            }
+-            catch { }
+-        }
+-        try
+-        {
+-            using var jsRoot = Registry.CurrentUser.OpenSubKey(
+-                @"System\CurrentControlSet\Control\MediaResources\Joystick", writable: true);
+-            if (jsRoot != null)
+-                foreach (var sub in jsRoot.GetSubKeyNames())
++                try
+                 {
+-                    try
+-                    {
+-                        using var settings = jsRoot.OpenSubKey($@"{sub}\CurrentJoystickSettings", writable: true);
+-                        if (settings != null)
+-                            foreach (var name in settings.GetValueNames())
+-                            {
+-                                if (name.StartsWith("Joystick", StringComparison.OrdinalIgnoreCase) &&
+-                                    (name.Contains("OEMName", StringComparison.OrdinalIgnoreCase) ||
+-                                     name.Contains("Configuration", StringComparison.OrdinalIgnoreCase)))
+-                                    settings.DeleteValue(name, false);
+-                            }
+-                    }
+-                    catch { }
+-                    try
++                    using var oemKey = root.OpenSubKey(oemRelPath, writable: true);
++                    if (oemKey != null)
++                        foreach (var sub in oemKey.GetSubKeyNames())
++                            if (oemPrefixes.Any(p => sub.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
++                                try { oemKey.DeleteSubKeyTree(sub, false); } catch { }
++                }
++                catch { }
++            }
++            try
++            {
++                using var jsRoot = Registry.CurrentUser.OpenSubKey(
++                    @"System\CurrentControlSet\Control\MediaResources\Joystick", writable: true);
++                if (jsRoot != null)
++                    foreach (var sub in jsRoot.GetSubKeyNames())
+                     {
+-                        using var jsSettings = jsRoot.OpenSubKey($@"{sub}\JoystickSettings", writable: true);
+-                        if (jsSettings != null)
+-                            foreach (var vidPid in jsSettings.GetSubKeyNames())
+-                            {
+-                                try
++                        try
++                        {
++                            using var settings = jsRoot.OpenSubKey($@"{sub}\CurrentJoystickSettings", writable: true);
++                            if (settings != null)
++                                foreach (var name in settings.GetValueNames())
++                                {
++                                    if (name.StartsWith("Joystick", StringComparison.OrdinalIgnoreCase) &&
++                                        (name.Contains("OEMName", StringComparison.OrdinalIgnoreCase) ||
++                                         name.Contains("Configuration", StringComparison.OrdinalIgnoreCase)))
++                                        settings.DeleteValue(name, false);
++                                }
++                        }
++                        catch { }
++                        try
++                        {
++                            using var jsSettings = jsRoot.OpenSubKey($@"{sub}\JoystickSettings", writable: true);
++                            if (jsSettings != null)
++                                foreach (var vidPid in jsSettings.GetSubKeyNames())
+                                 {
+-                                    using var vidPidKey = jsSettings.OpenSubKey(vidPid, writable: true);
+-                                    if (vidPidKey == null) continue;
+-                                    foreach (var name in vidPidKey.GetValueNames())
++                                    try
+                                     {
+-                                        if (name.StartsWith("Joystick", StringComparison.OrdinalIgnoreCase) &&
+-                                            (name.Contains("OEMName", StringComparison.OrdinalIgnoreCase) ||
+-                                             name.Contains("Configuration", StringComparison.OrdinalIgnoreCase)))
+-                                            vidPidKey.DeleteValue(name, false);
++                                        using var vidPidKey = jsSettings.OpenSubKey(vidPid, writable: true);
++                                        if (vidPidKey == null) continue;
++                                        foreach (var name in vidPidKey.GetValueNames())
++                                        {
++                                            if (name.StartsWith("Joystick", StringComparison.OrdinalIgnoreCase) &&
++                                                (name.Contains("OEMName", StringComparison.OrdinalIgnoreCase) ||
++                                                 name.Contains("Configuration", StringComparison.OrdinalIgnoreCase)))
++                                                vidPidKey.DeleteValue(name, false);
++                                        }
+                                     }
++                                    catch { }
+                                 }
+-                                catch { }
+-                            }
++                        }
++                        catch { }
+                     }
+-                    catch { }
+-                }
+-        }
+-        catch { }
++            }
++            catch { }
+ 
++        }
+         Phase("joycpl");
+ 
+         // The WUDFHost release-wait and the orphan drain below exist to

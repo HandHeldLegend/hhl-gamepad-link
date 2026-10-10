@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- HHL Gamepad WLAN: HOJA gamepads on the home network appear on this PC as their own controllers
+       (SInput or XInput) through HIDMaestro virtual devices. One portable .exe: see build.cmd -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>HhlGamepadWlan</AssemblyName>
+    <RootNamespace>HhlGamepadWlan</RootNamespace>
+    <Version>0.1.0</Version> <!-- The release tag is v + this; the update badge compares them -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon> <!-- Resource 1: the .exe, the window and the tray -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks> <!-- LibraryImport generates its marshalling -->
+
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <DebugType>none</DebugType>
+
+    <!-- Set by build.cmd; these defaults match its layout -->
+    <HIDMaestroDir Condition="'$(HIDMaestroDir)' == ''">$(MSBuildThisFileDirectory)..\external\HIDMaestro\sdk\HIDMaestro.Core\bin\Release\net10.0-windows10.0.26100.0\</HIDMaestroDir>
+    <NativeUiLib Condition="'$(NativeUiLib)' == ''">$(MSBuildThisFileDirectory)..\build\native\hhl_ui.lib</NativeUiLib>
+  </PropertyGroup>
+
+  <!-- The window (native/hhl_ui.cpp with Dear ImGui), built by native/build.cmd and linked in -->
+  <ItemGroup>
+    <DirectPInvoke Include="hhl_ui" />
+    <NativeLibrary Include="$(NativeUiLib)" />
+    <NativeLibrary Include="d3d11.lib;d3dcompiler.lib;dwmapi.lib;imm32.lib;shell32.lib" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="HIDMaestro.Core">
+      <HintPath>$(HIDMaestroDir)HIDMaestro.Core.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>
