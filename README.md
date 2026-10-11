@@ -8,7 +8,7 @@ Play wirelessly on a Windows PC with a HOJA gamepad over your home network. You 
 - **Several gamepads and several PCs.** Every gamepad on the network shows up in the list. Open one to use it here, or claim one that another PC is using.
 - **Report rate:** 125, 250 or 500 Hz. Input is paced evenly, so 500 in gives a clean 500 out.
 - **Config app over WLAN.** While the app is running, [HHL Gamepad Config](https://handheldlegend.github.io/hoja3/) can connect to your gamepads through it, with no cable.
-- **Close to tray** and optional **Start with Windows**.
+- Optional **Close to tray** (the window's close button hides it in the notification area; Quit from the tray icon exits) and **Start with Windows**.
 
 ## Get it
 

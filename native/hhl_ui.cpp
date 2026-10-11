@@ -48,6 +48,7 @@ static const UINT kTrayMessage = WM_APP + 1;
 static const UINT kMenuShow = 1, kMenuQuit = 2;
 static NOTIFYICONDATAW g_tray = {};
 static bool g_hidden = false;
+static bool g_close_to_tray = false; // The footer's "Close to tray": closing the window hides it
 
 static void show_window()
 {
@@ -168,6 +169,13 @@ static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         else if (LOWORD(lparam) == WM_RBUTTONUP)
             tray_menu();
         return 0;
+    case WM_CLOSE:
+        if (g_close_to_tray)
+        {
+            hide_to_tray();
+            return 0;
+        }
+        break;
     case WM_DESTROY:
         if (g_hidden)
             Shell_NotifyIconW(NIM_DELETE, &g_tray);
@@ -461,12 +469,12 @@ extern "C" void ui_empty(const char *text)
     ImGui::PopStyleColor();
 }
 
-// Footer: the message and the update badge, then "Start with Windows", "Hide to tray" and "Drivers"
-// (which opens the Drivers window, see ui_drivers). Returns a mask: 1 Drivers opened, 2 hide to
-// tray, 4 "Start with Windows" toggled (its new value in *start_with_windows), 8 the update badge
-// clicked.
+// Footer: the message and the update badge, then "Start with Windows", "Close to tray" and
+// "Drivers" (which opens the Drivers window, see ui_drivers). Returns a mask: 1 Drivers opened,
+// 4 "Start with Windows" toggled (its new value in *start_with_windows), 8 the update badge
+// clicked. *close_to_tray is the checkbox, and closing the window follows it.
 // update_kind: 0 no badge, 1 up to date, 2 update available.
-extern "C" int ui_footer(const char *message, int *start_with_windows,
+extern "C" int ui_footer(const char *message, int *start_with_windows, int *close_to_tray,
                          const char *update_text, int update_kind)
 {
     const ImGuiStyle &st = ImGui::GetStyle();
@@ -503,16 +511,16 @@ extern "C" int ui_footer(const char *message, int *start_with_windows,
         *start_with_windows = start ? 1 : 0;
         result |= 4;
     }
+    ImGui::SameLine(0, 18 * g_scale);
+    bool to_tray = *close_to_tray != 0;
+    if (ImGui::Checkbox("Close to tray", &to_tray))
+        *close_to_tray = to_tray ? 1 : 0;
+    g_close_to_tray = to_tray;
     ImGui::PopStyleColor(3);
 
-    const char *hide = "Hide to tray";
     const char *label = "Drivers";
-    const float hide_w = ImGui::CalcTextSize(hide).x + st.FramePadding.x * 2;
     const float w = ImGui::CalcTextSize(label).x + st.FramePadding.x * 2;
-    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - w - st.ItemSpacing.x - hide_w);
-    if (ImGui::Button(hide))
-        result |= 2;
-    ImGui::SameLine();
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - w);
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
     if (ImGui::Button(label))
@@ -628,7 +636,3 @@ extern "C" int ui_drivers(const char **names, const char **details, const char *
     return action;
 }
 
-extern "C" void ui_hide_to_tray()
-{
-    hide_to_tray();
-}
