@@ -24,10 +24,10 @@ sealed class PadSession
     const long GamepadLostMs = 3000;
     const long OutResendMs = 8;
 
-    // XInput mode's device: an Xbox Series controller as Windows sees one over Bluetooth, one HID
-    // device that Microsoft's xinputhid gives XInput to. The Xbox 360 profile is a HID device plus a
-    // separate XInput companion in another device container, and Steam lists those as two pads.
-    const string XInputProfile = "xbox-series-xs-bt";
+    // XInput mode's device: an Xbox 360 controller for XInput only (HIDMaestro's companion), its HID
+    // device vendor-defined so nothing else sees it as a controller. With the HID device a gamepad,
+    // Steam listed it and the XInput pad as two controllers. A real wired 360 has no HID device either.
+    const string XInputProfile = "hhl-xbox-360";
 
     // The driver hands the host the newest frame, so after a command reply the input waits briefly:
     // otherwise the next input can replace the reply before the host reads it
@@ -199,7 +199,7 @@ sealed class PadSession
 
         if (_deviceProfile != null && packet.Report.Length >= 14)
         {
-            _xinput.Add(PeriodicClock.NowUs, packet.SentUs, Personas.XInput(_deviceProfile, packet.Report));
+            _xinput.Add(PeriodicClock.NowUs, packet.SentUs, Personas.XInput(packet.Report));
         }
     }
 
@@ -403,7 +403,7 @@ sealed class PadSession
             }
 
             State = SessionState.Open;
-            Status = $"Open as {(format == Protocol.FormatXInput ? "Xbox controller" : "SInput")}";
+            Status = $"Open as {(format == Protocol.FormatXInput ? "Xbox 360" : "SInput")}";
             StartPump();
         }));
     }
@@ -470,12 +470,6 @@ sealed class PadSession
         }
         if (packet.Source != HMOutputSource.HidOutput)
             return;
-        if (_deviceFormat == Protocol.FormatXInput)
-        {
-            if (Personas.XboxHidRumble(packet.ReportId, packet.Data.Span) is byte[] xboxRumble)
-                QueueOutput(xboxRumble);
-            return;
-        }
 
         var report = new byte[1 + packet.Data.Length];
         report[0] = packet.ReportId;

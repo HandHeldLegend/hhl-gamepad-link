@@ -1,3 +1,10 @@
+diff --git a/profiles/microsoft/hhl-xbox-360.json b/profiles/microsoft/hhl-xbox-360.json
+new file mode 100644
+index 0000000..db783f6
+--- /dev/null
++++ b/profiles/microsoft/hhl-xbox-360.json
+@@ -0,0 +1 @@
++{"id":"hhl-xbox-360","name":"Xbox 360 Controller (HHL Gamepad WLAN)","vendor":"Microsoft","vid":"0x045E","pid":"0x028E","productString":"Controller (XBOX 360 For Windows)","manufacturerString":"\u00c2\u00a9Microsoft Corporation","type":"gamepad","connection":"usb","descriptor":"0600ff0901a101150026ff007508951209018102c0","inputReportSize":18,"deviceDescription":"Controller (XBOX 360 For Windows)","notes":"xbox-360-wired with its HID device made vendor-defined, so the controller exists for XInput only, as a real wired Xbox 360 controller does (xusb22, no HID). The XUSB companion still gives XInput the pad, with rumble; Steam, SDL, DirectInput and browsers no longer see the HID device as a second controller. With no sticks or triggers in the descriptor, the companion reads the canonical axes: X, Y, Rx, Ry (0..1, Y downward) and triggers Z, Rz. Not visible to DirectInput-only games.","layout":{"kind":"unspecified","note":"No HID controls: the controller is XInput only."}}
 diff --git a/profiles/nintendo/hhl-gamecube-adapter.json b/profiles/nintendo/hhl-gamecube-adapter.json
 new file mode 100644
 index 0000000..c5177bf

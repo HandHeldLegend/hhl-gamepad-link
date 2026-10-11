@@ -44,8 +44,9 @@ static class Personas
     }
 
     // The gamepad's XInput report (as over USB): id, size, two button bytes, triggers, then four
-    // signed 16-bit stick axes with up positive
-    public static HMGamepadState XInput(HMProfile profile, ReadOnlySpan<byte> r)
+    // signed 16-bit stick axes with up positive. The Xbox 360 device has no HID controls, so its
+    // XInput side reads the canonical axes: sticks X, Y, Rx, Ry and triggers Z, Rz.
+    public static HMGamepadState XInput(ReadOnlySpan<byte> r)
     {
         byte b1 = r[2], b2 = r[3];
         bool up = (b1 & 0x01) != 0, down = (b1 & 0x02) != 0, left = (b1 & 0x04) != 0, right = (b1 & 0x08) != 0;
@@ -67,13 +68,15 @@ static class Personas
         {
             Buttons = buttons,
             Hat = Hat(up, down, left, right),
-            Axes = HMGamepadStateHelpers.StandardAxes(profile,
-                leftStickX: AxisX(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(6))),
-                leftStickY: AxisY(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(8))),
-                rightStickX: AxisX(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(10))),
-                rightStickY: AxisY(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(12))),
-                leftTrigger: r[4] / 255f,
-                rightTrigger: r[5] / 255f),
+            Axes = new Dictionary<HMAxis, float>
+            {
+                [HMAxis.X] = AxisX(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(6))),
+                [HMAxis.Y] = AxisY(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(8))),
+                [HMAxis.Rx] = AxisX(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(10))),
+                [HMAxis.Ry] = AxisY(BinaryPrimitives.ReadInt16LittleEndian(r.Slice(12))),
+                [HMAxis.Z] = r[4] / 255f,
+                [HMAxis.Rz] = r[5] / 255f,
+            },
         };
     }
 
@@ -81,16 +84,6 @@ static class Personas
     // takes it as the USB report, 00 08 00 left right
     public static byte[]? XInputRumble(ReadOnlySpan<byte> data) =>
         data.Length >= 4 ? new byte[] { 0x00, 0x08, 0x00, data[2], data[3], 0x00, 0x00, 0x00 } : null;
-
-    // The Xbox Series controller's rumble over Bluetooth (xinputhid writes it for XInputSetState):
-    // report 0x03 with enable, left trigger, right trigger, left motor, right motor, each motor 0..100
-    public static byte[]? XboxHidRumble(byte reportId, ReadOnlySpan<byte> data)
-    {
-        if (reportId != 0x03 || data.Length < 5)
-            return null;
-        static byte Motor(byte percent) => (byte)(Math.Min(percent, (byte)100) * 255 / 100);
-        return new byte[] { 0x00, 0x08, 0x00, Motor(data[3]), Motor(data[4]), 0x00, 0x00, 0x00 };
-    }
 
     // HID axes run 0..1 with 0.5 centred; XInput's Y is up positive, HID's grows downward
     static float AxisX(short v) => (v + 32768) / 65535f;
