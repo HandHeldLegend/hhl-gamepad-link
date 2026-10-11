@@ -24,6 +24,7 @@ sealed class LanHub : IDisposable
     readonly Dictionary<string, (Beacon Pad, EndPoint Address, DateTime LastSeen)> _pads = new();
     readonly Dictionary<string, PadSession> _sessions = new();
     readonly Dictionary<IPAddress, PadSession> _byAddress = new();
+    readonly Dictionary<string, byte> _modes = new(); // Picked here this run, by gamepad
 
     public uint Session { get; } = (uint)Random.Shared.Next(1, int.MaxValue); // This app run
     public string PcName { get; } = Environment.MachineName;
@@ -68,6 +69,8 @@ sealed class LanHub : IDisposable
             if (_sessions.TryGetValue(id, out var existing) && existing.State != SessionState.Closed)
                 return;
             var session = new PadSession(_ctx, _adapter, pad.Pad, pad.Address, Session, PcName, RateHz, Send);
+            if (_modes.TryGetValue(id, out byte format))
+                session.SetMode(format);
             _sessions[id] = session;
             _byAddress[((IPEndPoint)pad.Address).Address] = session;
         }
@@ -100,6 +103,18 @@ sealed class LanHub : IDisposable
         if (_sessions.TryGetValue(pad.Id, out var last) && last.State == SessionState.Closed &&
             last.Reason == CloseReason.WentAway && pad.OwnerSession == 0)
             Open(pad.Id);
+    }
+
+    // Put a gamepad in a mode for the rest of this run: now if it is open here, and each time it is
+    // opened again
+    public void SetMode(string id, byte format)
+    {
+        lock (_lock)
+        {
+            _modes[id] = format;
+            if (_sessions.TryGetValue(id, out var session) && session.State != SessionState.Closed)
+                session.SetMode(format);
+        }
     }
 
     public void SetRate(int rateHz)

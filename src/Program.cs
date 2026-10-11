@@ -9,6 +9,18 @@ int[] rates = { 125, 250, 500 };
 string[] rateLabels = rates.Select(r => $"{r} Hz").ToArray();
 int rateIndex = 1; // 250 Hz each run: nothing is saved
 
+// The modes a gamepad can be put in from here: the ones this app opens
+byte[] modeFormats = { Protocol.FormatSInput, Protocol.FormatXInput, Protocol.FormatSlippi };
+string[] modeLabels = { "SInput", "XInput", "Slippi" };
+string[] modeTrayLabels = { "SInput (Steam)", "XInput", "Slippi (GameCube adapter)" };
+
+// Tray menu item IDs: the report rates, then ten per gamepad for its modes
+const int TrayRateBase = 100, TrayModeBase = 1000;
+
+// The tray menu as last given to the window, and the gamepads its mode items stand for
+string trayKey = "";
+var trayPads = new List<string>();
+
 // One copy per PC: each sweeps away the controllers a killed run left behind
 using var single = new Mutex(initiallyOwned: true, @"Global\HhlGamepadWlan", out bool firstCopy);
 if (!firstCopy)
@@ -60,6 +72,16 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
         }
     }
 
+    UpdateTray();
+    int pick = NativeUi.TakeTrayChoice();
+    if (pick >= TrayModeBase && (pick - TrayModeBase) / 10 < trayPads.Count)
+        hub?.SetMode(trayPads[(pick - TrayModeBase) / 10], modeFormats[(pick - TrayModeBase) % 10]);
+    else if (pick >= TrayRateBase && pick < TrayRateBase + rates.Length)
+    {
+        rateIndex = pick - TrayRateBase;
+        hub?.SetRate(rates[rateIndex]);
+    }
+
     // Hidden in the tray: the gamepads keep running, there is just nothing to draw
     if (frame == NativeUi.Frame.Hidden)
         continue;
@@ -105,6 +127,39 @@ config?.Dispose();
 hub?.Dispose();
 ctx.Dispose();
 return 0;
+
+// The mode a session's gamepad is in (or is being put in), as an index into modeFormats
+int ModeIndex(PadSession session) => Array.IndexOf(modeFormats, session.WantedFormat ?? session.Format);
+
+// The tray menu's own items: the report rate, and each gamepad open here with its mode
+void UpdateTray()
+{
+    var items = new List<NativeUi.TrayItem> { new("Report rate", 0, 4) };
+    for (int i = 0; i < rates.Length; i++)
+        items.Add(new(rateLabels[i], TrayRateBase + i, i == rateIndex ? 1 : 0));
+    items.Add(new("", 0, 8));
+
+    var pads = new List<string>();
+    foreach (var e in hub?.Snapshot() ?? Array.Empty<PadEntry>())
+    {
+        if (e.Session is not { State: not SessionState.Closed } session)
+            continue;
+        int slot = pads.Count;
+        pads.Add(e.Pad.Id);
+        items.Add(new(e.Pad.Title, 0, 4));
+        int current = ModeIndex(session);
+        for (int m = 0; m < modeFormats.Length; m++)
+            items.Add(new(modeTrayLabels[m], TrayModeBase + slot * 10 + m, m == current ? 1 : 0));
+        items.Add(new("", 0, 8));
+    }
+
+    string key = string.Join("|", items);
+    if (key == trayKey)
+        return;
+    trayKey = key;
+    trayPads = pads;
+    NativeUi.SetTrayItems(items);
+}
 
 void DrawCard(PadEntry e)
 {
@@ -159,7 +214,13 @@ void DrawCard(PadEntry e)
         detail = $"{mode}  ·  {e.Pad.Rssi} dBm{last}";
     }
 
-    if (NativeUi.Card(e.Pad.Id, e.Pad.Title, detail, status, colour, e.Away ? 0 : SignalBars(e.Pad.Rssi), button, accent))
+    // A gamepad open here gets a mode picker
+    var (clicked, picked) = NativeUi.Card(e.Pad.Id, e.Pad.Title, detail, status, colour,
+        e.Away ? 0 : SignalBars(e.Pad.Rssi), button, accent,
+        here ? modeLabels : null, here ? ModeIndex(session!) : -1);
+    if (picked is int m)
+        hub!.SetMode(e.Pad.Id, modeFormats[m]);
+    if (clicked)
     {
         if (e.Away)
             hub!.Forget(e.Pad.Id);

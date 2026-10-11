@@ -25,7 +25,14 @@ static partial class NativeUi
 
     [LibraryImport(Lib, EntryPoint = "ui_pad_card", StringMarshalling = StringMarshalling.Utf8)]
     private static partial int PadCard(string id, string name, string detail, string status, int statusColor,
-                                       int signalBars, string button, int buttonKind);
+                                       int signalBars, string button, int buttonKind,
+                                       string[] modes, int modeCount, int modeSelected);
+
+    [LibraryImport(Lib, EntryPoint = "ui_tray_items", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial void TrayItems(string[] labels, int[] ids, int[] flags, int count);
+
+    [LibraryImport(Lib, EntryPoint = "ui_tray_take_choice")]
+    public static partial int TakeTrayChoice();
 
     [LibraryImport(Lib, EntryPoint = "ui_empty", StringMarshalling = StringMarshalling.Utf8)]
     public static partial void Empty(string text);
@@ -62,9 +69,25 @@ static partial class NativeUi
         return Header(title, subtitle, _rateLabels, rates.Length, selected);
     }
 
-    public static bool Card(string id, string name, string detail, string status, Status colour, int signalBars,
-                            string button, bool accent) =>
-        PadCard(id, name, detail, status, (int)colour, signalBars, button, accent ? 1 : 0) != 0;
+    // A gamepad's card, with a mode picker when modes are given. Returns whether its button was
+    // clicked, and the mode picked, if one was.
+    public static (bool Clicked, int? Mode) Card(string id, string name, string detail, string status, Status colour,
+                                                int signalBars, string button, bool accent,
+                                                string[]? modes = null, int modeSelected = -1)
+    {
+        modes ??= Array.Empty<string>();
+        int result = PadCard(id, name, detail, status, (int)colour, signalBars, button, accent ? 1 : 0,
+                             modes, modes.Length, modeSelected);
+        return ((result & 1) != 0, (result >> 8) > 0 ? (result >> 8) - 1 : null);
+    }
+
+    // A tray menu item. Flags: 1 checked, 2 separator, 4 starts a submenu (titled with this item),
+    // 8 ends it.
+    public sealed record TrayItem(string Label, int Id, int Flags);
+
+    public static void SetTrayItems(IReadOnlyList<TrayItem> items) =>
+        TrayItems(items.Select(i => i.Label).ToArray(), items.Select(i => i.Id).ToArray(),
+                  items.Select(i => i.Flags).ToArray(), items.Count);
 
     public static FooterAction FooterBar(string message, ref bool startWithWindows, ref bool closeToTray,
                                          Updates.State update, string updateText)

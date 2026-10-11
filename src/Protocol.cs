@@ -19,6 +19,7 @@ static class Protocol
     public const uint MagicConfig = 0x31474643; // "CFG1": a config app command
     public const uint MagicReply = 0x31524643;  // "CFR1": a config reply, echoed back as receipt
     public const uint MagicLive = 0x31494643;   // "CFI1": the config app's live input view
+    public const uint MagicMode = 0x31444F4D;   // "MOD1": the mode this PC wants the gamepad in
 
     public const int BeaconSize = 68;         // Without the user name (earlier firmware)
     public const int BeaconWithUserSize = 92; // With the name set in the config app
@@ -51,6 +52,17 @@ static class Protocol
         BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), periodUs);
         BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(8), session);
         Encoding.ASCII.GetBytes(pcName, 0, Math.Min(pcName.Length, PcNameLength - 1), p, 12);
+        return p;
+    }
+
+    // MOD1: magic, session, the core_reportformat_t wanted, 3 reserved bytes. Gamepads without it
+    // ignore it.
+    public static byte[] Mode(uint session, byte format)
+    {
+        var p = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(p, MagicMode);
+        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), session);
+        p[8] = format;
         return p;
     }
 

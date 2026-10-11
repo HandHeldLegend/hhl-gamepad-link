@@ -4,6 +4,8 @@
 // how the window looks lives here. Strings are UTF-8.
 
 #include <windows.h>
+#include <string>
+#include <vector>
 #include <shellapi.h>
 #include <dwmapi.h>
 #include <d3d11.h>
@@ -46,6 +48,16 @@ static ImFont *g_font_bold = nullptr;
 // Hidden to the notification area: an icon there brings the window back
 static const UINT kTrayMessage = WM_APP + 1;
 static const UINT kMenuShow = 1, kMenuQuit = 2;
+
+// The app's own tray menu items (ui_tray_items), between Show and Quit, and the one picked
+struct TrayItem
+{
+    std::wstring label;
+    UINT id;
+    int flags; // 1 checked, 2 separator, 4 starts a submenu (this item is its title), 8 ends one
+};
+static std::vector<TrayItem> g_tray_items;
+static int g_tray_choice = 0;
 static NOTIFYICONDATAW g_tray = {};
 static bool g_hidden = false;
 static bool g_close_to_tray = false; // The footer's "Close to tray": closing the window hides it
@@ -96,6 +108,29 @@ static void tray_menu()
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, kMenuShow, L"Show HHL Gamepad WLAN");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    // The app's items, with their submenus
+    std::vector<HMENU> open = {menu};
+    for (const TrayItem &item : g_tray_items)
+    {
+        if (item.flags & 2)
+            AppendMenuW(open.back(), MF_SEPARATOR, 0, nullptr);
+        else if (item.flags & 4)
+        {
+            HMENU sub = CreatePopupMenu();
+            AppendMenuW(open.back(), MF_POPUP, (UINT_PTR)sub, item.label.c_str());
+            open.push_back(sub);
+        }
+        else if (item.flags & 8)
+        {
+            if (open.size() > 1)
+                open.pop_back();
+        }
+        else
+            AppendMenuW(open.back(), MF_STRING | ((item.flags & 1) ? MF_CHECKED : 0), item.id, item.label.c_str());
+    }
+    if (!g_tray_items.empty())
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuQuit, L"Quit");
     POINT at;
     GetCursorPos(&at);
@@ -106,6 +141,8 @@ static void tray_menu()
         show_window();
     else if (chosen == kMenuQuit)
         DestroyWindow(g_hwnd);
+    else if (chosen != 0)
+        g_tray_choice = (int)chosen;
 }
 
 static void create_target()
@@ -313,6 +350,28 @@ extern "C" void ui_end()
     g_swapchain->Present(1, 0); // In step with the display: no busy loop
 }
 
+// The app's tray menu items: labels (UTF-8), the ID each returns and its flags (see TrayItem)
+extern "C" void ui_tray_items(const char **labels, const int *ids, const int *flags, int count)
+{
+    g_tray_items.clear();
+    for (int i = 0; i < count; i++)
+    {
+        int n = MultiByteToWideChar(CP_UTF8, 0, labels[i], -1, nullptr, 0);
+        std::wstring label(n > 0 ? n - 1 : 0, L'\0');
+        if (n > 1)
+            MultiByteToWideChar(CP_UTF8, 0, labels[i], -1, label.data(), n);
+        g_tray_items.push_back({label, (UINT)ids[i], flags[i]});
+    }
+}
+
+// The ID of the tray item picked since the last call, or 0
+extern "C" int ui_tray_take_choice()
+{
+    int chosen = g_tray_choice;
+    g_tray_choice = 0;
+    return chosen;
+}
+
 extern "C" void ui_shutdown()
 {
     ImGui_ImplDX11_Shutdown();
@@ -374,9 +433,13 @@ extern "C" int ui_header(const char *title, const char *subtitle,
 // One gamepad: name, status and its button on the top row, the details across the card below
 // (cut short with "…" if they don't fit). Returns 1 on the frame the button was clicked.
 // button_kind: 0 plain, 1 accent.
+// A gamepad's card. With mode_count > 0 a mode picker sits left of the button, showing
+// modes[mode_selected]. Returns 1 when the button was clicked, plus (picked mode + 1) << 8 when
+// a mode was picked.
 extern "C" int ui_pad_card(const char *id, const char *name, const char *detail,
                            const char *status, int status_color, int signal_bars,
-                           const char *button, int button_kind)
+                           const char *button, int button_kind,
+                           const char **modes, int mode_count, int mode_selected)
 {
     ImGui::PushID(id);
     const ImGuiStyle &st = ImGui::GetStyle();
@@ -395,12 +458,19 @@ extern "C" int ui_pad_card(const char *id, const char *name, const char *detail,
     dl->AddRectFilled(start, ImVec2(start.x + width, start.y + height), kCard, 12 * g_scale);
     dl->AddRect(start, ImVec2(start.x + width, start.y + height), kCardBorder, 12 * g_scale);
 
-    // Button on the right, the status to its left: at most 40% of the card, cut short past that
+    // Button on the right, the mode picker left of it, and the status left of those: at most 40%
+    // of the card, cut short past that
     const float bx = start.x + width - pad - bsize.x;
+    float mode_w = 0;
+    for (int i = 0; i < mode_count; i++)
+        mode_w = ImMax(mode_w, ImGui::CalcTextSize(modes[i]).x);
+    if (mode_count > 0)
+        mode_w += st.FramePadding.x * 2 + ImGui::GetFrameHeight();
+    const float mx = bx - (mode_count > 0 ? mode_w + 8 * g_scale : 0);
     const float status_full = ImGui::CalcTextSize(status).x;
     const float status_w = ImMin(status_full, width * 0.4f);
     const float dot = 4.5f * g_scale;
-    const float sx = bx - 18 * g_scale - status_w;
+    const float sx = mx - 18 * g_scale - status_w;
     const float sy = row_y + (bsize.y - line) * 0.5f;
     dl->AddCircleFilled(ImVec2(sx - dot * 2.2f, sy + line * 0.5f), dot, kStatus[status_color & 3]);
     ImGui::PushStyleColor(ImGuiCol_Text, status_color == 2 ? kTextDim : kText);
@@ -453,10 +523,25 @@ extern "C" int ui_pad_card(const char *id, const char *name, const char *detail,
     if (button_kind == 1)
         ImGui::PopStyleColor(4);
 
+    int picked = -1;
+    if (mode_count > 0)
+    {
+        ImGui::SetCursorScreenPos(ImVec2(mx, row_y + (bsize.y - ImGui::GetFrameHeight()) * 0.5f));
+        ImGui::SetNextItemWidth(mode_w);
+        const bool known = mode_selected >= 0 && mode_selected < mode_count;
+        if (ImGui::BeginCombo("##mode", known ? modes[mode_selected] : "Mode"))
+        {
+            for (int i = 0; i < mode_count; i++)
+                if (ImGui::Selectable(modes[i], i == mode_selected))
+                    picked = i;
+            ImGui::EndCombo();
+        }
+    }
+
     ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + height + 10 * g_scale));
     ImGui::Dummy(ImVec2(0, 0));
     ImGui::PopID();
-    return clicked ? 1 : 0;
+    return (clicked ? 1 : 0) | (picked >= 0 ? (picked + 1) << 8 : 0);
 }
 
 extern "C" void ui_empty(const char *text)

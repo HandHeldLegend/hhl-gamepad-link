@@ -125,6 +125,20 @@ sealed class PadSession
     // One sample per report: the gamepad sends at the report rate and each sample is played once
     static uint WlanPeriodUs(int rateHz) => (uint)(1_000_000 / rateHz);
 
+    // The mode this PC wants the gamepad in, for this run (0 for none): asked for while it differs,
+    // so it also holds after the gamepad restarts
+    byte _wantedFormat;
+    long _lastModeSent = -KeepAliveMs;
+
+    public byte Format { get; private set; } = 0xFF; // The mode its packets are in
+    public byte? WantedFormat => _wantedFormat == 0 ? null : _wantedFormat;
+
+    public void SetMode(byte format)
+    {
+        _wantedFormat = format;
+        _lastModeSent = -KeepAliveMs; // Ask now
+    }
+
     public void SetRate(int rateHz)
     {
         _rateHz = rateHz;
@@ -157,6 +171,7 @@ sealed class PadSession
 
         if (_outPending != null && packet.OutAck == _outInFlight)
             _outPending = null;
+        Format = packet.Format;
 
         // The gamepad changed mode: its device goes, and the one for the new mode comes up
         if (_deviceFormat != 0xFF && packet.Format != _deviceFormat)
@@ -264,6 +279,12 @@ sealed class PadSession
         {
             _send(Protocol.Open(WlanPeriodUs(_rateHz), _session, _pcName), Address);
             _lastOpenSent = now;
+        }
+
+        if (_wantedFormat != 0 && Format != 0xFF && Format != _wantedFormat && now - _lastModeSent >= KeepAliveMs)
+        {
+            _send(Protocol.Mode(_session, _wantedFormat), Address);
+            _lastModeSent = now;
         }
 
         if (now - _lastPacket >= GamepadLostMs)
