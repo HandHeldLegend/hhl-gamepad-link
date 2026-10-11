@@ -4,7 +4,7 @@
 
 Play wirelessly on a Windows PC with a HOJA gamepad over your home network. You don't need a dongle. The gamepad joins your WLAN, and this app turns it into a real controller on the PC, in the mode the gamepad is set to (SInput, XInput or Slippi). Steam and games see it like any other wired controller, and Dolphin sees gamepads in Slippi mode as a GameCube adapter.
 
-- **One portable .exe.** There's no installer, and it keeps no config files or registry settings of its own.
+- **One portable .exe.** There's no installer and no registry settings. The one setting it keeps, Close to tray, is in `%LOCALAPPDATA%\HHL Gamepad WLAN`.
 - **Several gamepads and several PCs.** Every gamepad on the network shows up in the list. Open one to use it here, or claim one that another PC is using.
 - **Report rate:** 125, 250 or 500 Hz. Input is paced evenly, so 500 in gives a clean 500 out.
 - **Config app over WLAN.** While the app is running, [HHL Gamepad Config](https://handheldlegend.github.io/hoja3/) can connect to your gamepads through it, with no cable.
@@ -40,7 +40,7 @@ A gamepad that nobody opens turns itself off after 2 minutes. If an open gamepad
 
 ## Removing it
 
-Untick **Start with Windows** and click **Drivers** in the app's footer. The Drivers window lists the two drivers the app uses: the virtual controller driver (HIDMaestro) and the USB/IP transport (usbip-win2), if a gamepad in XInput or Slippi mode was ever opened. Remove each one, close the app, and delete the .exe.
+Untick **Start with Windows** and click **Drivers** in the app's footer. The Drivers window lists the two drivers the app uses: the virtual controller driver (HIDMaestro) and the USB/IP transport (usbip-win2), if a gamepad in XInput or Slippi mode was ever opened. Remove each one, close the app, and delete the .exe and the `%LOCALAPPDATA%\HHL Gamepad WLAN` folder.
 
 ## Building
 

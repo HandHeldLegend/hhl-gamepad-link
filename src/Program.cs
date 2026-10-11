@@ -31,7 +31,8 @@ bool startHidden = args.Contains("--tray");
 if (!NativeUi.Open("HHL Gamepad WLAN", 620, 480, startHidden))
     return 1;
 bool startWithWindows = Autostart.IsOn();
-bool closeToTray = false; // Each run: nothing is saved
+Settings.Load();
+bool closeToTray = Settings.CloseToTray; // Kept between runs (Settings)
 if (startWithWindows)
     Autostart.Set(true); // Points it at this .exe, wherever it now is and whatever it is called
 
@@ -111,6 +112,7 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
         drivers.Act((Drivers.Which)row, remove);
     NativeUi.End();
 
+    Settings.SetCloseToTray(closeToTray);
     if (action.HasFlag(NativeUi.FooterAction.OpenUpdate))
         Updates.OpenReleasesPage();
     if (action.HasFlag(NativeUi.FooterAction.StartWithWindowsChanged))
