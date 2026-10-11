@@ -150,13 +150,18 @@ sealed class LanHub : IDisposable
     {
         if (DataPacket.TryParse(packet, out var data))
         {
-            // The stream of a gamepad opened here: echo it (round trip, and receipt of command
-            // replies), then hand it to its session
-            Send(packet.ToArray(), from);
+            // The stream of a gamepad opened here goes to its session. A command reply is echoed
+            // every time, as its receipt; the rest only now and then, for the round trip, since
+            // the OPEN keepalive already tells the gamepad this PC is there. Echoing every input
+            // would double the traffic on the WLAN.
             lock (_lock)
             {
                 if (_byAddress.TryGetValue(((IPEndPoint)from).Address, out var session))
+                {
+                    if (data.ReliableToken != 0 || session.EchoDue())
+                        Send(packet.ToArray(), from);
                     session.OnData(data);
+                }
             }
             return;
         }

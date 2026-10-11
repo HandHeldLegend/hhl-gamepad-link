@@ -109,6 +109,19 @@ sealed class PadSession
         _lastPacket = _clock.ElapsedMilliseconds;
     }
 
+    // Input echoes for the round trip: ten a second is plenty to show it
+    const long EchoEveryMs = 100;
+    long _lastEcho = -EchoEveryMs;
+
+    public bool EchoDue()
+    {
+        long now = _clock.ElapsedMilliseconds;
+        if (now - _lastEcho < EchoEveryMs)
+            return false;
+        _lastEcho = now;
+        return true;
+    }
+
     // One sample per report: the gamepad sends at the report rate and each sample is played once
     static uint WlanPeriodUs(int rateHz) => (uint)(1_000_000 / rateHz);
 
