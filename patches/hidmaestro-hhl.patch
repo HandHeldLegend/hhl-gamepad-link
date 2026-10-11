@@ -1,10 +1,10 @@
-diff --git a/profiles/microsoft/hhl-xbox-360.json b/profiles/microsoft/hhl-xbox-360.json
+diff --git a/profiles/microsoft/hhl-xbox-360-usb.json b/profiles/microsoft/hhl-xbox-360-usb.json
 new file mode 100644
-index 0000000..db783f6
+index 0000000..455af4e
 --- /dev/null
-+++ b/profiles/microsoft/hhl-xbox-360.json
++++ b/profiles/microsoft/hhl-xbox-360-usb.json
 @@ -0,0 +1 @@
-+{"id":"hhl-xbox-360","name":"Xbox 360 Controller (HHL Gamepad WLAN)","vendor":"Microsoft","vid":"0x045E","pid":"0x028E","productString":"Controller (XBOX 360 For Windows)","manufacturerString":"\u00c2\u00a9Microsoft Corporation","type":"gamepad","connection":"usb","descriptor":"0600ff0901a101150026ff007508951209018102c0","inputReportSize":18,"deviceDescription":"Controller (XBOX 360 For Windows)","notes":"xbox-360-wired with its HID device made vendor-defined, so the controller exists for XInput only, as a real wired Xbox 360 controller does (xusb22, no HID). The XUSB companion still gives XInput the pad, with rumble; Steam, SDL, DirectInput and browsers no longer see the HID device as a second controller. With no sticks or triggers in the descriptor, the companion reads the canonical axes: X, Y, Rx, Ry (0..1, Y downward) and triggers Z, Rz. Not visible to DirectInput-only games.","layout":{"kind":"unspecified","note":"No HID controls: the controller is XInput only."}}
++{"id":"hhl-xbox-360-usb","name":"Xbox 360 Controller (Wired, USB/IP)","vendor":"Microsoft","vid":"0x045E","pid":"0x028E","productString":"Controller","manufacturerString":"©Microsoft Corporation","type":"gamepad","connection":"usb","backend":"usbip","descriptor":"0600ff0901a101150026ff007508951409018102c0","inputReportSize":20,"notes":"A wired Xbox 360 controller as the USB device it is: 045E:028E, bcdDevice 1.14, four vendor-class interfaces (FF/5D/01 input on interrupt 0x81 and output on 0x01, FF/5D/03 and FF/5D/02 headset, FF/FD/13 security), no HID interface, so Windows binds its own xusb22 driver and every API sees one controller, as with the real pad. The consumer sends the 20-byte input report (00 14, buttons, triggers, sticks) whole with SubmitRawExtendedReport, and output arrives as the pad's own reports (00 08 00 left right rumble, 01 03 LED). The one vendor request xusb22 needs, the capabilities read (C1 01 0100), is answered from controlReplies. The descriptor field is unused: a 20-byte vendor placeholder the SDK requires.","layout":{"kind":"unspecified","note":"XInput through xusb22."},"usbConfiguration":{"configurationValue":1,"attributes":160,"maxPowerMilliamps":500,"busSpeed":"full","deviceDescriptor":"12010002ffffff085e048e02140101020301","configurationDescriptor":"09029900040100a0fa0904000002ff5d0100112100010125811400000000130108000007058103200004070501032000080904010004ff5d03001b2100010101824001022016830000000000001603000000000000070582032000020705020320000407058303200040070503032000100904020001ff5d0200092100010122840700070584032000100904030000fffd1304064100010103","interfaces":[{"interfaceNumber":0,"function":"xusb","altSettings":[{"altSetting":0,"interfaceClass":255,"interfaceSubClass":93,"interfaceProtocol":1,"endpoints":[{"address":129,"transferType":"interrupt","maxPacketSize":32,"interval":4},{"address":1,"transferType":"interrupt","maxPacketSize":32,"interval":8}]}]},{"interfaceNumber":1,"function":"vendor","altSettings":[{"altSetting":0,"interfaceClass":255,"interfaceSubClass":93,"interfaceProtocol":3,"endpoints":[{"address":130,"transferType":"interrupt","maxPacketSize":32,"interval":2},{"address":2,"transferType":"interrupt","maxPacketSize":32,"interval":4},{"address":131,"transferType":"interrupt","maxPacketSize":32,"interval":64},{"address":3,"transferType":"interrupt","maxPacketSize":32,"interval":16}]}]},{"interfaceNumber":2,"function":"vendor","altSettings":[{"altSetting":0,"interfaceClass":255,"interfaceSubClass":93,"interfaceProtocol":2,"endpoints":[{"address":132,"transferType":"interrupt","maxPacketSize":32,"interval":16}]}]},{"interfaceNumber":3,"function":"vendor","altSettings":[{"altSetting":0,"interfaceClass":255,"interfaceSubClass":253,"interfaceProtocol":19,"endpoints":[]}]}],"controlReplies":[{"requestType":193,"request":1,"value":256,"data":"0014ffffffffff7fff7fff7fff7fffffffff0000"}]}}
 diff --git a/profiles/nintendo/hhl-gamecube-adapter.json b/profiles/nintendo/hhl-gamecube-adapter.json
 new file mode 100644
 index 0000000..c5177bf
@@ -741,6 +741,156 @@ index ad51894..1153b8e 100644
      [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
      private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
          string StringSecurityDescriptor, uint StringSDRevision,
+diff --git a/sdk/HIDMaestro.Core/Internal/UsbConfigurationSpec.cs b/sdk/HIDMaestro.Core/Internal/UsbConfigurationSpec.cs
+index 82ed783..d12200f 100644
+--- a/sdk/HIDMaestro.Core/Internal/UsbConfigurationSpec.cs
++++ b/sdk/HIDMaestro.Core/Internal/UsbConfigurationSpec.cs
+@@ -87,6 +87,13 @@ public sealed class UsbConfigurationSpec
+     /// real pad stalls string 0xEE, which is all the Sony and Valve ones.</summary>
+     [JsonPropertyName("microsoftOs")]
+     public UsbMicrosoftOsSpec? MicrosoftOs { get; set; }
++
++    /// <summary>HOJA local build: fixed replies to control requests, matched on bmRequestType,
++    /// bRequest and wValue. A device with no HID interface answers its class or vendor requests
++    /// this way, such as the Xbox 360 controller's capabilities read. Null for every other
++    /// persona.</summary>
++    [JsonPropertyName("controlReplies")]
++    public List<UsbControlReplySpec>? ControlReplies { get; set; }
+ }
+ 
+ /// <summary>Issue #66. Microsoft OS 1.0 descriptors, each a hex string of the
+@@ -308,3 +315,21 @@ public sealed class UsbAudioStreamSpec
+     [JsonPropertyName("channelRoles")]
+     public List<string> ChannelRoles { get; set; } = new();
+ }
++
++/// <summary>HOJA local build: one fixed control reply (see
++/// <see cref="UsbConfigurationSpec.ControlReplies"/>).</summary>
++public sealed class UsbControlReplySpec
++{
++    [JsonPropertyName("requestType")]
++    public byte RequestType { get; set; }
++
++    [JsonPropertyName("request")]
++    public byte Request { get; set; }
++
++    [JsonPropertyName("value")]
++    public ushort Value { get; set; }
++
++    /// <summary>The reply, hex. A shorter wLength gets its start.</summary>
++    [JsonPropertyName("data")]
++    public string Data { get; set; } = "";
++}
+diff --git a/sdk/HIDMaestro.Core/Internal/Usbip/UsbDescriptorSet.cs b/sdk/HIDMaestro.Core/Internal/Usbip/UsbDescriptorSet.cs
+index 798b969..cb9d31e 100644
+--- a/sdk/HIDMaestro.Core/Internal/Usbip/UsbDescriptorSet.cs
++++ b/sdk/HIDMaestro.Core/Internal/Usbip/UsbDescriptorSet.cs
+@@ -71,6 +71,10 @@ internal sealed class UsbDescriptorSet
+     public byte HidInterfaceNumber { get; }
+     private readonly byte[] _hidClassDescriptor;
+ 
++    // HOJA local build: the primary interface is the Xbox 360's vendor XUSB interface, not HID
++    private readonly bool _primaryIsXusb;
++    private readonly List<(byte RequestType, byte Request, ushort Value, byte[] Data)> _controlReplies = new();
++
+     /// <summary>Issue #56. Secondary HID interfaces, keyed by interface
+     /// number: the class descriptor found in the blob paired with the
+     /// report descriptor the profile declares for it. A Steam Deck persona
+@@ -227,6 +231,15 @@ internal sealed class UsbDescriptorSet
+         foreach (var iface in cfg.Interfaces)
+             if (iface.Function == "hid") { declaredPrimary = iface.InterfaceNumber; break; }
+ 
++        // HOJA local build: a device with no HID interface (the Xbox 360 controller) names its
++        // vendor input interface "xusb" instead, and that is the one its input goes out on
++        byte xusbIface = 0xFF;
++        foreach (var iface in cfg.Interfaces)
++            if (iface.Function == "xusb") { xusbIface = iface.InterfaceNumber; break; }
++        _primaryIsXusb = xusbIface != 0xFF;
++        foreach (var r in cfg.ControlReplies ?? new List<UsbControlReplySpec>())
++            _controlReplies.Add((r.RequestType, r.Request, r.Value, Convert.FromHexString(r.Data)));
++
+         // Report descriptors the spec declares per interface, for the
+         // secondary HID interfaces (issue #56).
+         var declaredReports = new Dictionary<byte, byte[]>();
+@@ -235,7 +248,7 @@ internal sealed class UsbDescriptorSet
+                 if (!string.IsNullOrEmpty(alt.ReportDescriptor))
+                     declaredReports[iface.InterfaceNumber] = Convert.FromHexString(alt.ReportDescriptor);
+ 
+-        byte curIface = 0xFF, curAlt = 0;
++        byte curIface = 0xFF, curAlt = 0, curClass = 0;
+         byte hidIface = 0xFF;
+         var classByIface = new Dictionary<byte, byte[]>();
+         for (int off = 0; off + 2 <= blob.Length;)
+@@ -248,6 +261,7 @@ internal sealed class UsbDescriptorSet
+             {
+                 curIface = blob[off + 2];
+                 curAlt = blob[off + 3];
++                curClass = blob[off + 5];
+                 if (blob[off + 5] == 0x03 && hidIface == 0xFF) hidIface = curIface;
+             }
+             else if (type == 0x05) // endpoint
+@@ -257,7 +271,7 @@ internal sealed class UsbDescriptorSet
+                     (ushort)(blob[off + 4] | (blob[off + 5] << 8)), blob[off + 6], curIface, curAlt);
+                 _endpoints[addr] = info;
+             }
+-            else if (type == 0x21) // HID class descriptor
++            else if (type == 0x21 && curClass == 0x03) // HID class descriptor (0x21 is vendor data elsewhere)
+             {
+                 var thisClass = new byte[len];
+                 Array.Copy(blob, off, thisClass, 0, len);
+@@ -265,20 +279,22 @@ internal sealed class UsbDescriptorSet
+             }
+             off += len;
+         }
+-        if (classByIface.Count == 0 || hidIface == 0xFF)
++        if (!_primaryIsXusb && (classByIface.Count == 0 || hidIface == 0xFF))
+             throw new InvalidOperationException("configurationDescriptor has no HID interface.");
+ 
+         // A spec-declared "hid" function wins; otherwise the first HID
+         // interface in the blob, which is the pre-#56 rule verbatim.
+         if (declaredPrimary != 0xFF && classByIface.ContainsKey(declaredPrimary))
+             hidIface = declaredPrimary;
+-        byte[] hidClass = classByIface[hidIface];
++        if (_primaryIsXusb)
++            hidIface = xusbIface;
++        byte[] hidClass = _primaryIsXusb ? Array.Empty<byte>() : classByIface[hidIface];
+ 
+         // Every HID class descriptor must agree with the descriptor its own
+         // interface serves: the profile's for the primary, the spec's for a
+         // secondary. A device that declares one length then serves another
+         // does not enumerate, so a mismatch is refused at create time.
+-        int declaredPrimaryLen = hidClass[7] | (hidClass[8] << 8);
++        int declaredPrimaryLen = _primaryIsXusb ? ReportDescriptor.Length : hidClass[7] | (hidClass[8] << 8);
+         if (declaredPrimaryLen != ReportDescriptor.Length)
+             throw new InvalidOperationException(
+                 $"HID class descriptor declares a {declaredPrimaryLen}-byte report descriptor " +
+@@ -404,6 +420,8 @@ internal sealed class UsbDescriptorSet
+     /// each its own (issue #56).</summary>
+     public byte[]? GetHidDescriptor(byte type, byte interfaceNumber)
+     {
++        if (_primaryIsXusb && interfaceNumber == HidInterfaceNumber)
++            return null;
+         if (interfaceNumber != HidInterfaceNumber
+             && _secondaryHid.TryGetValue(interfaceNumber, out var sec))
+             return type switch { 0x22 => sec.ReportDescriptor, 0x21 => sec.ClassDescriptor, _ => null };
+@@ -413,7 +431,16 @@ internal sealed class UsbDescriptorSet
+     /// <summary>True when the interface number is a HID interface this
+     /// device presents, primary or secondary.</summary>
+     public bool IsHidInterface(byte interfaceNumber)
+-        => interfaceNumber == HidInterfaceNumber || _secondaryHid.ContainsKey(interfaceNumber);
++        => (!_primaryIsXusb && interfaceNumber == HidInterfaceNumber) || _secondaryHid.ContainsKey(interfaceNumber);
++
++    /// <summary>HOJA local build: the profile's fixed reply to this control request, or null.</summary>
++    public byte[]? GetControlReply(byte requestType, byte request, ushort value)
++    {
++        foreach (var r in _controlReplies)
++            if (r.RequestType == requestType && r.Request == request && r.Value == value)
++                return r.Data;
++        return null;
++    }
+ 
+     private byte[]? GetStringDescriptor(byte index)
+     {
 diff --git a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs
 index 663aba6..c47e155 100644
 --- a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs
@@ -769,3 +919,23 @@ index 35d708c..5f8eb87 100644
              UseShellExecute = false,
              CreateNoWindow = true,
          };
+diff --git a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipEmulatedDevice.cs b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipEmulatedDevice.cs
+index bf34373..8589d34 100644
+--- a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipEmulatedDevice.cs
++++ b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipEmulatedDevice.cs
+@@ -768,6 +768,15 @@ internal sealed class UsbipEmulatedDevice : IDisposable
+             return;
+         }
+ 
++        // HOJA local build: the profile's fixed replies (the Xbox 360's capabilities read)
++        var fixedReply = Descriptors.GetControlReply(bmRequestType, bRequest, wValue);
++        if (fixedReply != null)
++        {
++            int n = Math.Min(fixedReply.Length, wLength);
++            SendRetSubmit(cmd.Seqnum, 0, n, fixedReply.AsSpan(0, n).ToArray());
++            return;
++        }
++
+         if (type == 0) // standard
+         {
+             switch (bRequest)

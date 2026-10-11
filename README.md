@@ -28,13 +28,19 @@ The app asks for administrator rights. It needs them to install the virtual cont
 
 Gamepads in Slippi mode share one virtual GameCube Controller Adapter, the Wii U adapter Dolphin and Slippi read. Each gamepad you open gets a port of its own, in the order you open them. A gamepad that drops out and comes back gets its old port back. Up to four fit. Rumble from Dolphin goes to the gamepad on that port.
 
-In Dolphin, set the ports to **GameCube Adapter for Wii U**. No Zadig or driver setup is needed. The first time a gamepad in Slippi mode is opened on a PC, the app installs [usbip-win2](https://github.com/vadimgrn/usbip-win2), the signed USB/IP transport the adapter runs on, and your USB devices disconnect for a moment while it does.
+In Dolphin, set the ports to **GameCube Adapter for Wii U**. No Zadig or driver setup is needed.
+
+## XInput mode
+
+A gamepad in XInput mode is a wired Xbox 360 controller to Windows: the same USB device, driven by Windows' own Xbox 360 driver, so Steam and games see exactly one controller.
+
+XInput and Slippi modes both run on [usbip-win2](https://github.com/vadimgrn/usbip-win2), the signed USB/IP transport these USB devices need. The first time a gamepad opens in either mode on a PC, the app installs it, and your USB devices disconnect for a moment while it does.
 
 A gamepad that nobody opens turns itself off after 2 minutes. If an open gamepad's PC goes away, it turns off after 30 seconds.
 
 ## Removing it
 
-Untick **Start with Windows** and click **Drivers** in the app's footer. The Drivers window lists the two drivers the app uses: the virtual controller driver (HIDMaestro) and, if a gamepad in Slippi mode was ever opened, the USB/IP transport (usbip-win2). Remove each one, close the app, and delete the .exe.
+Untick **Start with Windows** and click **Drivers** in the app's footer. The Drivers window lists the two drivers the app uses: the virtual controller driver (HIDMaestro) and the USB/IP transport (usbip-win2), if a gamepad in XInput or Slippi mode was ever opened. Remove each one, close the app, and delete the .exe.
 
 ## Building
 

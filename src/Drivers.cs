@@ -45,14 +45,15 @@ sealed class Drivers
     public IReadOnlyList<NativeUi.DriverRow> Rows => new[]
     {
         new NativeUi.DriverRow("Virtual controller driver",
-            "HIDMaestro. Makes gamepads in SInput and XInput mode controllers on this PC. HHL Gamepad WLAN " +
+            "HIDMaestro. Makes gamepads in SInput mode controllers on this PC. HHL Gamepad WLAN " +
             "installs it each time it starts.",
             State(Which.Controller), _installed[0], _busy == Which.Controller,
             "Every gamepad open here closes, and the driver and its certificate leave this PC. Other apps " +
             "that use HIDMaestro lose their controllers and the driver too."),
         new NativeUi.DriverRow("USB/IP transport",
-            "usbip-win2. Carries the GameCube adapter that gamepads in Slippi mode share. Installed the first " +
-            "time one is opened. USB devices disconnect for a moment while it installs.",
+            "usbip-win2. Carries the Xbox 360 controller of XInput mode and the GameCube adapter of Slippi " +
+            "mode. Installed the first time a gamepad opens in either. USB devices disconnect for a moment " +
+            "while it installs.",
             State(Which.UsbIp), _installed[1], _busy == Which.UsbIp,
             "Every gamepad open here closes. Other programs that use usbip-win2 lose it too."),
     };

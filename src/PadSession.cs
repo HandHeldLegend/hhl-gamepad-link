@@ -24,10 +24,13 @@ sealed class PadSession
     const long GamepadLostMs = 3000;
     const long OutResendMs = 8;
 
-    // XInput mode's device: an Xbox 360 controller for XInput only (HIDMaestro's companion), its HID
-    // device vendor-defined so nothing else sees it as a controller. With the HID device a gamepad,
-    // Steam listed it and the XInput pad as two controllers. A real wired 360 has no HID device either.
-    const string XInputProfile = "hhl-xbox-360";
+    // XInput mode's device: a wired Xbox 360 controller as the USB device it is, on the USB/IP
+    // transport, so Windows' own xusb22 drives it and every API sees one controller. HIDMaestro's
+    // Xbox profiles pair a HID device with an XInput companion, and Steam listed those as two pads
+    // (XInput and GameInput each reported it). The gamepad's XInput report is the 360's USB report,
+    // and Windows' rumble and LED reports are what its XInput mode takes, so both pass through.
+    const string XInputProfile = "hhl-xbox-360-usb";
+    const int XInputReportSize = 20;
 
     // The driver hands the host the newest frame, so after a command reply the input waits briefly:
     // otherwise the next input can replace the reply before the host reads it
@@ -55,8 +58,8 @@ sealed class PadSession
     HMController? _device;
     byte _deviceFormat = 0xFF;
     HMProfile? _deviceProfile;
-    readonly Playout<byte[]> _sinput = new();
-    readonly Playout<HMGamepadState> _xinput = new();
+    readonly Playout<byte[]> _reports = new(); // The gamepad's input reports, as the device takes them
+    bool _doubleSubmit; // HIDMaestro's HID driver hands the host every other frame; USB/IP devices don't
     readonly ConcurrentQueue<byte[]> _oneShots = new();
     GcAdapter.Port? _gcPort;
     Thread? _pump;
@@ -95,9 +98,8 @@ sealed class PadSession
 
     (long DelayUs, double LateShare) Timing => _deviceFormat switch
     {
-        Protocol.FormatXInput => (_xinput.DelayUs, _xinput.LateShare),
         Protocol.FormatSlippi when _gcPort != null => (_gcPort.Playout.DelayUs, _gcPort.Playout.LateShare),
-        _ => (_sinput.DelayUs, _sinput.LateShare),
+        _ => (_reports.DelayUs, _reports.LateShare),
     };
 
     public PadSession(HMContext ctx, GcAdapter adapter, Beacon pad, EndPoint address, uint session, string pcName,
@@ -197,10 +199,8 @@ sealed class PadSession
         if (_deviceFormat == 0xFF)
             StartDevice(_ctx.GetProfile(XInputProfile)!, Protocol.FormatXInput, firstReport: null);
 
-        if (_deviceProfile != null && packet.Report.Length >= 14)
-        {
-            _xinput.Add(PeriodicClock.NowUs, packet.SentUs, Personas.XInput(packet.Report));
-        }
+        if (_deviceProfile != null && packet.Report.Length >= XInputReportSize)
+            _reports.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report.Slice(0, XInputReportSize).ToArray());
     }
 
     void OnSInput(in DataPacket packet)
@@ -235,7 +235,7 @@ sealed class PadSession
         }
         else if (packet.ReliableToken == 0 && packet.Report.Length > 0)
         {
-            _sinput.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report.ToArray());
+            _reports.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report.ToArray());
         }
     }
 
@@ -369,6 +369,7 @@ sealed class PadSession
     {
         _deviceFormat = format;
         _deviceProfile = profile;
+        _doubleSubmit = !profile.RequiresUsbipBackend;
         Status = "Creating the controller…";
 
         // Each device gets its own ID: Steam can hold a removed device open, and reusing its ID
@@ -379,6 +380,13 @@ sealed class PadSession
             HMController created;
             try
             {
+                // A USB device (the Xbox 360) needs the USB/IP transport: the first time on a PC it
+                // installs, and USB devices blink once
+                if (profile.RequiresUsbipBackend && !HMContext.IsUsbipBackendAvailable)
+                    Status = "Installing USB/IP…";
+                if (profile.RequiresUsbipBackend)
+                    Drivers.EnsureUsbIp();
+                Status = "Creating the controller…";
                 created = _ctx.CreateController(profile, identity);
             }
             catch (Exception e)
@@ -417,8 +425,7 @@ sealed class PadSession
             _device = null;
             _deviceFormat = 0xFF;
             _deviceProfile = null;
-            _sinput.Clear();
-            _xinput.Clear();
+            _reports.Clear();
             _oneShots.Clear();
         }
         _pumping = false;
@@ -462,12 +469,6 @@ sealed class PadSession
 
     void OnOutput(HMController controller, HMOutputPacket packet)
     {
-        if (packet.Source == HMOutputSource.XInput)
-        {
-            if (Personas.XInputRumble(packet.Data.Span) is byte[] rumble)
-                QueueOutput(rumble);
-            return;
-        }
         if (packet.Source != HMOutputSource.HidOutput)
             return;
 
@@ -501,7 +502,7 @@ sealed class PadSession
             while (_pumping)
             {
                 long now = PeriodicClock.NowUs;
-                long due = Math.Min(_sinput.NextDueUs(), _xinput.NextDueUs());
+                long due = _reports.NextDueUs();
                 long wake = Math.Max(Math.Min(due, now + 1_000), holdInputUntil); // Checks replies every 1 ms
                 if (wake > now)
                     timer.WaitUntilUs(wake);
@@ -514,21 +515,17 @@ sealed class PadSession
                     if (_oneShots.TryDequeue(out var reply))
                     {
                         _device.SubmitRawExtendedReport(reply);
-                        _device.SubmitRawExtendedReport(reply);
+                        if (_doubleSubmit)
+                            _device.SubmitRawExtendedReport(reply);
                         holdInputUntil = now + ReplyHoldMs * 1000;
                     }
                     else if (now >= holdInputUntil)
                     {
-                        if (_xinput.TryTakeDue(now, out var state))
-                        {
-                            _device.SubmitState(state);
-                            _device.SubmitState(state);
-                            _submitted++;
-                        }
-                        else if (_sinput.TryTakeDue(now, out var input))
+                        if (_reports.TryTakeDue(now, out var input))
                         {
                             _device.SubmitRawExtendedReport(input);
-                            _device.SubmitRawExtendedReport(input);
+                            if (_doubleSubmit)
+                                _device.SubmitRawExtendedReport(input);
                             _submitted++;
                         }
                     }
