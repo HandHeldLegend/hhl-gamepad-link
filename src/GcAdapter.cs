@@ -178,7 +178,7 @@ sealed class GcAdapter : IDisposable
     void RemoveDevice()
     {
         var gone = _device;
-        _device = null; // Its clock stops
+        _device = null; // Its clock stops, and submits no more once this lock is released
         if (gone != null)
         {
             gone.OutputReceived -= OnOutput;
@@ -250,9 +250,13 @@ sealed class GcAdapter : IDisposable
                                  : port.Current;
                         data.CopyTo(report, 1 + i * PortBytes);
                     }
+
+                    // Under the lock removal takes, so the device can't be disposed mid-submit: its
+                    // memory goes with it, and writing there ends the app
+                    if (_device != device)
+                        break;
+                    device.SubmitRawExtendedReport(report);
                 }
-                try { device.SubmitRawExtendedReport(report); }
-                catch (ObjectDisposedException) { }
             }
         }) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "GameCube adapter" }.Start();
     }
