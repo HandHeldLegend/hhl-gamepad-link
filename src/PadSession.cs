@@ -32,6 +32,11 @@ sealed class PadSession
     const string XInputProfile = "hhl-xbox-360-usb";
     const int XInputReportSize = 20;
 
+    // A new Xbox 360 sends no input for this long. Steam (SDL) sees a controller through both
+    // XInput and GameInput and keeps one only when GameInput has it first; a wired 360 counts for
+    // XInput once it reports, so this lets GameInput register it before XInput sees it.
+    const long XInputQuietStartMs = 3000;
+
     // The driver hands the host the newest frame, so after a command reply the input waits briefly:
     // otherwise the next input can replace the reply before the host reads it
     const long ReplyHoldMs = 20;
@@ -499,6 +504,9 @@ sealed class PadSession
         {
             using var timer = new PeriodicClock(1);
             long holdInputUntil = 0;
+            long quietUntil = _deviceFormat == Protocol.FormatXInput
+                ? PeriodicClock.NowUs + XInputQuietStartMs * 1000
+                : 0;
             while (_pumping)
             {
                 long now = PeriodicClock.NowUs;
@@ -512,6 +520,11 @@ sealed class PadSession
                 {
                     if (_device == null)
                         continue;
+                    if (now < quietUntil)
+                    {
+                        while (_reports.TryTakeDue(now, out _)) { } // Dropped, not saved for later
+                        continue;
+                    }
                     if (_oneShots.TryDequeue(out var reply))
                     {
                         _device.SubmitRawExtendedReport(reply);
