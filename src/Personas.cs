@@ -82,6 +82,16 @@ static class Personas
     public static byte[]? XInputRumble(ReadOnlySpan<byte> data) =>
         data.Length >= 4 ? new byte[] { 0x00, 0x08, 0x00, data[2], data[3], 0x00, 0x00, 0x00 } : null;
 
+    // The Xbox Series controller's rumble over Bluetooth (xinputhid writes it for XInputSetState):
+    // report 0x03 with enable, left trigger, right trigger, left motor, right motor, each motor 0..100
+    public static byte[]? XboxHidRumble(byte reportId, ReadOnlySpan<byte> data)
+    {
+        if (reportId != 0x03 || data.Length < 5)
+            return null;
+        static byte Motor(byte percent) => (byte)(Math.Min(percent, (byte)100) * 255 / 100);
+        return new byte[] { 0x00, 0x08, 0x00, Motor(data[3]), Motor(data[4]), 0x00, 0x00, 0x00 };
+    }
+
     // HID axes run 0..1 with 0.5 centred; XInput's Y is up positive, HID's grows downward
     static float AxisX(short v) => (v + 32768) / 65535f;
     static float AxisY(short v) => (32767 - v) / 65535f;

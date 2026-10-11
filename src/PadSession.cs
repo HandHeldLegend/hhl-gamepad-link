@@ -24,6 +24,11 @@ sealed class PadSession
     const long GamepadLostMs = 3000;
     const long OutResendMs = 8;
 
+    // XInput mode's device: an Xbox Series controller as Windows sees one over Bluetooth, one HID
+    // device that Microsoft's xinputhid gives XInput to. The Xbox 360 profile is a HID device plus a
+    // separate XInput companion in another device container, and Steam lists those as two pads.
+    const string XInputProfile = "xbox-series-xs-bt";
+
     // The driver hands the host the newest frame, so after a command reply the input waits briefly:
     // otherwise the next input can replace the reply before the host reads it
     const long ReplyHoldMs = 20;
@@ -190,7 +195,7 @@ sealed class PadSession
     void OnXInput(in DataPacket packet)
     {
         if (_deviceFormat == 0xFF)
-            StartDevice(_ctx.GetProfile("xbox-360-wired")!, Protocol.FormatXInput, firstReport: null);
+            StartDevice(_ctx.GetProfile(XInputProfile)!, Protocol.FormatXInput, firstReport: null);
 
         if (_deviceProfile != null && packet.Report.Length >= 14)
         {
@@ -398,7 +403,7 @@ sealed class PadSession
             }
 
             State = SessionState.Open;
-            Status = $"Open as {(format == Protocol.FormatXInput ? "Xbox 360" : "SInput")}";
+            Status = $"Open as {(format == Protocol.FormatXInput ? "Xbox controller" : "SInput")}";
             StartPump();
         }));
     }
@@ -465,6 +470,12 @@ sealed class PadSession
         }
         if (packet.Source != HMOutputSource.HidOutput)
             return;
+        if (_deviceFormat == Protocol.FormatXInput)
+        {
+            if (Personas.XboxHidRumble(packet.ReportId, packet.Data.Span) is byte[] xboxRumble)
+                QueueOutput(xboxRumble);
+            return;
+        }
 
         var report = new byte[1 + packet.Data.Length];
         report[0] = packet.ReportId;
