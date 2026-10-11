@@ -237,6 +237,269 @@ index 7b43781..ebaf6c2 100644
          var identity = Internal.DeviceIdentity.Resolve(identityKey, index);
          ThrowIfIdentityInUse(identity);
  
+diff --git a/sdk/HIDMaestro.Core/HMLayout.cs b/sdk/HIDMaestro.Core/HMLayout.cs
+index 99377f9..91f9ce7 100644
+--- a/sdk/HIDMaestro.Core/HMLayout.cs
++++ b/sdk/HIDMaestro.Core/HMLayout.cs
+@@ -153,7 +153,7 @@ public sealed record HMTrigger
+ {
+     public HMAxis Axis { get; init; }
+     public HMTriggerSide Side { get; init; }
+-    public HMTriggerKind Kind { get; init; } = HMTriggerKind.Analog;
++    public HMTriggerKind Kind { get; set; } = HMTriggerKind.Analog;
+     public int? Stages { get; init; } // 1 = single-stage, 2 = two-stage detent (X52 trigger)
+ }
+ 
+@@ -179,13 +179,13 @@ public sealed record HMHatBinding
+ {
+     public HMAxis Axis { get; init; }
+     public int Positions { get; init; }
+-    public HMHatLocation Location { get; init; } = HMHatLocation.Unknown;
++    public HMHatLocation Location { get; set; } = HMHatLocation.Unknown;
+     public string? Role { get; init; } // free-text role for HOTAS hats with non-enum roles
+ }
+ 
+ public sealed record HMHaptics
+ {
+-    public HMRumbleKind Rumble { get; init; } = HMRumbleKind.None;
++    public HMRumbleKind Rumble { get; set; } = HMRumbleKind.None;
+     public bool TriggerHaptics { get; init; }
+ }
+ 
+@@ -213,20 +213,20 @@ public sealed record HMPedal
+ {
+     public HMAxis Axis { get; init; }
+     public HMAxisRole Role { get; init; }   // Throttle | Brake | Clutch | Rudder | Accelerator
+-    public HMPedalType Type { get; init; } = HMPedalType.Unknown;
++    public HMPedalType Type { get; set; } = HMPedalType.Unknown;
+ }
+ 
+ public sealed record HMShifter
+ {
+     public HMShifterKind Kind { get; init; }
+     public int? ButtonIndex { get; init; }
+-    public HMShifterActuation Actuation { get; init; } = HMShifterActuation.Digital;
++    public HMShifterActuation Actuation { get; set; } = HMShifterActuation.Digital;
+ }
+ 
+ public sealed record HMRotaryEncoder
+ {
+     public HMAxis Axis { get; init; }
+-    public HMAxisRole Role { get; init; } = HMAxisRole.Dial;
++    public HMAxisRole Role { get; set; } = HMAxisRole.Dial;
+     public int? Positions { get; init; } // for detented encoders; null = continuous
+ }
+ 
+@@ -238,7 +238,7 @@ public sealed record HMRevIndicator
+ public sealed record HMTriggerButton
+ {
+     public int ButtonIndex { get; init; }
+-    public int Stages { get; init; } = 1;
++    public int Stages { get; set; } = 1;
+ }
+ 
+ // =====================================================================
+@@ -254,8 +254,8 @@ public sealed record HMSimpleStick
+ {
+     public HMAxis XAxis { get; init; }
+     public HMAxis YAxis { get; init; }   // HMAxis.None when only X is used (1D stick)
+-    public HMAxisRole RoleX { get; init; } = HMAxisRole.Unknown;
+-    public HMAxisRole RoleY { get; init; } = HMAxisRole.Unknown;
++    public HMAxisRole RoleX { get; set; } = HMAxisRole.Unknown;
++    public HMAxisRole RoleY { get; set; } = HMAxisRole.Unknown;
+     public string? Label { get; init; }
+ }
+ 
+@@ -270,7 +270,7 @@ public sealed record HMSimpleStick
+ public sealed record HMSimpleTrigger
+ {
+     public HMAxis Axis { get; init; }
+-    public HMAxisRole Role { get; init; } = HMAxisRole.Unknown;
++    public HMAxisRole Role { get; set; } = HMAxisRole.Unknown;
+     public string? Label { get; init; }
+ }
+ 
+@@ -281,6 +281,9 @@ public sealed record HMSimpleTrigger
+ /// <summary>Per-profile structured physical-design declaration. Each
+ /// concrete subclass corresponds to one <see cref="HMLayoutKind"/>
+ /// value and exposes the fields that kind requires.</summary>
++// HOJA local build: properties with defaults are { get; set; }, not init, because the compile-time
++// JSON metadata (ProfileJsonContext) sets every init-only property, so one the JSON leaves out
++// came back null instead of its default
+ public abstract record HMLayout
+ {
+     public abstract HMLayoutKind Kind { get; }
+@@ -300,13 +303,13 @@ public sealed record HMUnspecifiedLayout : HMLayout
+ public sealed record HMGamepadLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Gamepad;
+-    public IReadOnlyList<HMStick> Sticks { get; init; } = Array.Empty<HMStick>();
+-    public IReadOnlyList<HMTrigger> Triggers { get; init; } = Array.Empty<HMTrigger>();
++    public IReadOnlyList<HMStick> Sticks { get; set; } = Array.Empty<HMStick>();
++    public IReadOnlyList<HMTrigger> Triggers { get; set; } = Array.Empty<HMTrigger>();
+     public HMDpad? Dpad { get; init; }
+-    public IReadOnlyList<HMButtonBinding> FaceButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> ShoulderButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> SystemButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> ExtraButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> FaceButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> ShoulderButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> SystemButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> ExtraButtons { get; set; } = Array.Empty<HMButtonBinding>();
+     public HMHaptics? Haptics { get; init; }
+     public HMImu? Imu { get; init; }
+ }
+@@ -314,42 +317,42 @@ public sealed record HMGamepadLayout : HMLayout
+ public sealed record HMJoystickLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Joystick;
+-    public HMStick Stick { get; init; } = new();
++    public HMStick Stick { get; set; } = new();
+     public HMRudder? Rudder { get; init; }
+     public HMPedal? Throttle { get; init; }   // single-throttle slider on stick base
+-    public IReadOnlyList<HMHatBinding> Hats { get; init; } = Array.Empty<HMHatBinding>();
++    public IReadOnlyList<HMHatBinding> Hats { get; set; } = Array.Empty<HMHatBinding>();
+     public HMTriggerButton? Trigger { get; init; }
+-    public IReadOnlyList<HMButtonBinding> StickButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> BaseButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> StickButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> BaseButtons { get; set; } = Array.Empty<HMButtonBinding>();
+     public bool ForceFeedback { get; init; }
+ }
+ 
+ public sealed record HMFlightStickLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.FlightStick;
+-    public HMStick Stick { get; init; } = new();
++    public HMStick Stick { get; set; } = new();
+     public HMRudder? Rudder { get; init; }
+     public HMPedal? Throttle { get; init; }
+-    public IReadOnlyList<HMHatBinding> Hats { get; init; } = Array.Empty<HMHatBinding>();
++    public IReadOnlyList<HMHatBinding> Hats { get; set; } = Array.Empty<HMHatBinding>();
+     public HMTriggerButton? Trigger { get; init; }
+-    public IReadOnlyList<HMButtonBinding> StickButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> BaseButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> StickButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> BaseButtons { get; set; } = Array.Empty<HMButtonBinding>();
+ }
+ 
+ public sealed record HMHotasLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Hotas;
+-    public HMStick Stick { get; init; } = new();
++    public HMStick Stick { get; set; } = new();
+     public HMRudder? StickRudder { get; init; }       // twist-grip rudder on the stick (if any)
+-    public IReadOnlyList<HMHatBinding> StickHats { get; init; } = Array.Empty<HMHatBinding>();
++    public IReadOnlyList<HMHatBinding> StickHats { get; set; } = Array.Empty<HMHatBinding>();
+     public HMTriggerButton? StickTrigger { get; init; }
+-    public IReadOnlyList<HMButtonBinding> StickButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> StickButtons { get; set; } = Array.Empty<HMButtonBinding>();
+ 
+     // Throttle module
+     public HMPedal? ThrottlePrimary { get; init; }       // main throttle (Throttle role)
+-    public IReadOnlyList<HMRotaryEncoder> ThrottleSecondary { get; init; } = Array.Empty<HMRotaryEncoder>();
+-    public IReadOnlyList<HMHatBinding> ThrottleHats { get; init; } = Array.Empty<HMHatBinding>();
+-    public IReadOnlyList<HMButtonBinding> ThrottleButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMRotaryEncoder> ThrottleSecondary { get; set; } = Array.Empty<HMRotaryEncoder>();
++    public IReadOnlyList<HMHatBinding> ThrottleHats { get; set; } = Array.Empty<HMHatBinding>();
++    public IReadOnlyList<HMButtonBinding> ThrottleButtons { get; set; } = Array.Empty<HMButtonBinding>();
+ 
+     // Rudder module (some HOTAS sets bundle a separate rudder rocker on the throttle base)
+     public HMPedal? RudderModule { get; init; }
+@@ -358,11 +361,11 @@ public sealed record HMHotasLayout : HMLayout
+ public sealed record HMWheelLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Wheel;
+-    public HMWheelSpec Wheel { get; init; } = new();
+-    public IReadOnlyList<HMPedal> Pedals { get; init; } = Array.Empty<HMPedal>();
+-    public IReadOnlyList<HMShifter> Shifters { get; init; } = Array.Empty<HMShifter>();
+-    public IReadOnlyList<HMButtonBinding> WheelButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMRotaryEncoder> RotaryEncoders { get; init; } = Array.Empty<HMRotaryEncoder>();
++    public HMWheelSpec Wheel { get; set; } = new();
++    public IReadOnlyList<HMPedal> Pedals { get; set; } = Array.Empty<HMPedal>();
++    public IReadOnlyList<HMShifter> Shifters { get; set; } = Array.Empty<HMShifter>();
++    public IReadOnlyList<HMButtonBinding> WheelButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMRotaryEncoder> RotaryEncoders { get; set; } = Array.Empty<HMRotaryEncoder>();
+     public HMDpad? Dpad { get; init; }
+     public HMRevIndicator? RevIndicator { get; init; }
+ }
+@@ -370,13 +373,13 @@ public sealed record HMWheelLayout : HMLayout
+ public sealed record HMPedalsLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Pedals;
+-    public IReadOnlyList<HMPedal> Pedals { get; init; } = Array.Empty<HMPedal>();
++    public IReadOnlyList<HMPedal> Pedals { get; set; } = Array.Empty<HMPedal>();
+ }
+ 
+ public sealed record HMShifterLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Shifter;
+-    public IReadOnlyList<HMShifterKind> Modes { get; init; } = Array.Empty<HMShifterKind>();
++    public IReadOnlyList<HMShifterKind> Modes { get; set; } = Array.Empty<HMShifterKind>();
+     public IReadOnlyDictionary<string, HMButtonBinding>? HPatternGears { get; init; }
+     public int? SequentialUpButton { get; init; }
+     public int? SequentialDownButton { get; init; }
+@@ -392,15 +395,15 @@ public sealed record HMSingleAxisAccessoryLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.SingleAxisAccessory;
+     public HMAxis Axis { get; init; }
+-    public HMAxisRole Role { get; init; } = HMAxisRole.Unknown;
++    public HMAxisRole Role { get; set; } = HMAxisRole.Unknown;
+ }
+ 
+ public sealed record HMArcadeStickLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.ArcadeStick;
+-    public HMDpad Joystick { get; init; } = new();
+-    public IReadOnlyList<HMButtonBinding> FaceButtons { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> SystemButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public HMDpad Joystick { get; set; } = new();
++    public IReadOnlyList<HMButtonBinding> FaceButtons { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> SystemButtons { get; set; } = Array.Empty<HMButtonBinding>();
+ }
+ 
+ public sealed record HMDancePadLayout : HMLayout
+@@ -408,18 +411,18 @@ public sealed record HMDancePadLayout : HMLayout
+     public override HMLayoutKind Kind => HMLayoutKind.DancePad;
+     public IReadOnlyDictionary<string, HMButtonBinding> Pads { get; init; } =
+         new Dictionary<string, HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> SystemButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> SystemButtons { get; set; } = Array.Empty<HMButtonBinding>();
+ }
+ 
+ public sealed record HMGuitarLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Guitar;
+-    public IReadOnlyList<HMButtonBinding> Frets { get; init; } = Array.Empty<HMButtonBinding>();
+-    public IReadOnlyList<HMButtonBinding> SoloFrets { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> Frets { get; set; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> SoloFrets { get; set; } = Array.Empty<HMButtonBinding>();
+     public HMDpad? Strum { get; init; }    // up/down dpad encoding
+     public HMAxis? WhammyAxis { get; init; }
+     public int? TiltButton { get; init; }
+-    public IReadOnlyList<HMButtonBinding> SystemButtons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> SystemButtons { get; set; } = Array.Empty<HMButtonBinding>();
+ }
+ 
+ public sealed record HMMotionWandLayout : HMLayout
+@@ -427,7 +430,7 @@ public sealed record HMMotionWandLayout : HMLayout
+     public override HMLayoutKind Kind => HMLayoutKind.MotionWand;
+     public HMTriggerButton? Trigger { get; init; }
+     public HMAxis? TriggerAxis { get; init; } // PS Move T trigger has analog axis
+-    public IReadOnlyList<HMButtonBinding> Buttons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> Buttons { get; set; } = Array.Empty<HMButtonBinding>();
+     public HMImu? Imu { get; init; }
+     public bool RgbLightbar { get; init; }
+ }
+@@ -435,7 +438,7 @@ public sealed record HMMotionWandLayout : HMLayout
+ public sealed record HMRemoteLayout : HMLayout
+ {
+     public override HMLayoutKind Kind => HMLayoutKind.Remote;
+-    public IReadOnlyList<HMButtonBinding> Buttons { get; init; } = Array.Empty<HMButtonBinding>();
++    public IReadOnlyList<HMButtonBinding> Buttons { get; set; } = Array.Empty<HMButtonBinding>();
+ }
+ 
+ public sealed record HMControllerAdapterLayout : HMLayout
 diff --git a/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs b/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs
 index 05b151d..1fef953 100644
 --- a/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs

@@ -175,7 +175,12 @@ sealed class LanHub : IDisposable
                 {
                     if (data.ReliableToken != 0 || session.EchoDue())
                         Send(packet.ToArray(), from);
-                    session.OnData(data);
+                    try { session.OnData(data); }
+                    catch (Exception e)
+                    {
+                        // One gamepad's fault closes that gamepad, not the app
+                        session.Close($"Error: {e.Message}", CloseReason.Closed);
+                    }
                 }
             }
             return;
