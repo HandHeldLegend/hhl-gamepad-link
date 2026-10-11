@@ -12,7 +12,7 @@ Play wirelessly on a Windows PC with a HOJA gamepad over your home network. You 
 
 ## Get it
 
-Download `HhlGamepadWlan.exe` from the [latest release](https://github.com/HandHeldLegend/hhl-gamepad-wlan/releases/latest) and run it. Each release lists its changes. The app's footer shows whether a newer release is out.
+Download `HHL Gamepad WLAN.exe` from the [latest release](https://github.com/HandHeldLegend/hhl-gamepad-wlan/releases/latest) and run it. Each release lists its changes. The app's footer shows whether a newer release is out.
 
 The .exe isn't code-signed, so Windows SmartScreen may warn you the first time. Choose **More info**, then **Run anyway**.
 
@@ -46,7 +46,7 @@ cd hhl-gamepad-wlan
 build.cmd
 ```
 
-`build.cmd` downloads the .NET 10 SDK and the Windows Driver Kit's NuGet package into `.tools\` and checks each against a pinned hash. Nothing is installed system-wide. To keep the tools somewhere else, set `HHL_TOOLS`. The result is `build\release\HhlGamepadWlan.exe`.
+`build.cmd` downloads the .NET 10 SDK and the Windows Driver Kit's NuGet package into `.tools\` and checks each against a pinned hash. Nothing is installed system-wide. To keep the tools somewhere else, set `HHL_TOOLS`. The result is `build\release\HHL Gamepad WLAN.exe`.
 
 The layout:
 

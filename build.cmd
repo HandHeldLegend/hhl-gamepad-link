@@ -1,5 +1,5 @@
 @echo off
-:: Builds HHL Gamepad WLAN into build\release\HhlGamepadWlan.exe (one portable file).
+:: Builds HHL Gamepad WLAN into "build\release\HHL Gamepad WLAN.exe" (one portable file).
 ::
 :: Needs Visual Studio 2022 with the C++ x64 tools and the Windows SDK 10.0.26100. Everything else
 :: (the .NET 10 SDK and the Windows Driver Kit package) is fetched into .tools\ by
@@ -47,4 +47,4 @@ dotnet publish "%ROOT%src\HhlGamepadWlan.csproj" -c Release -r win-x64 -o "%OUT%
 del /q "%OUT%\release\*.pdb" 2>nul
 copy /y "%ROOT%THIRD-PARTY-NOTICES.txt" "%OUT%\release\" >nul
 echo.
-echo Built %OUT%\release\HhlGamepadWlan.exe
+echo Built "%OUT%\release\HHL Gamepad WLAN.exe"

@@ -19,6 +19,8 @@ bool startHidden = args.Contains("--tray");
 if (!NativeUi.Open("HHL Gamepad WLAN", 620, 480, startHidden))
     return 1;
 bool startWithWindows = Autostart.IsOn();
+if (startWithWindows)
+    Autostart.Set(true); // Points it at this .exe, wherever it now is and whatever it is called
 
 using var stopUpdates = new CancellationTokenSource();
 Updates.Start(stopUpdates.Token);
