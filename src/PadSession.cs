@@ -217,7 +217,9 @@ sealed class PadSession
             }
         }
 
-        if (_deviceFormat == 0xFF && _features != null)
+        // Its USB identity comes from the beacon, so wait for one in this mode: right after a mode
+        // change the last beacon still has the previous mode's (the Xbox 360's, or the adapter's)
+        if (_deviceFormat == 0xFF && _features != null && Pad.Format == Protocol.FormatSInput)
             StartDevice(Personas.SInput(Pad), Protocol.FormatSInput, firstReport: _features);
 
         // A resent command reply goes to the host once; input is played at its own time
