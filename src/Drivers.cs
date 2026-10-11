@@ -48,7 +48,8 @@ sealed class Drivers
             "HIDMaestro. Makes gamepads in SInput and XInput mode controllers on this PC. HHL Gamepad WLAN " +
             "installs it each time it starts.",
             State(Which.Controller), _installed[0], _busy == Which.Controller,
-            "Every gamepad open here closes, and the driver and its certificate leave this PC."),
+            "Every gamepad open here closes, and the driver and its certificate leave this PC. Other apps " +
+            "that use HIDMaestro lose their controllers and the driver too."),
         new NativeUi.DriverRow("USB/IP transport",
             "usbip-win2. Carries the GameCube adapter that gamepads in Slippi mode share. Installed the first " +
             "time one is opened. USB devices disconnect for a moment while it installs.",

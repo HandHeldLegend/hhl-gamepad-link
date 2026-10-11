@@ -31,7 +31,9 @@ ctx.LoadDefaultProfiles();
 string message = "Getting the controller driver ready…";
 var driverReady = Task.Run(() =>
 {
-    HMContext.RemoveAllVirtualControllers(preserveInstall: true);
+    // Not while another HIDMaestro app has controllers up: the sweep removes every app's
+    if (!HMContext.OtherAppHasControllers())
+        HMContext.RemoveAllVirtualControllers(preserveInstall: true);
     ctx.InstallDriver();
 });
 LanHub? hub = null;

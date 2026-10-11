@@ -181,6 +181,62 @@ index b422516..78e5aa3 100644
  
      <Copy SourceFiles="$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.txt"
            DestinationFolder="$(MSBuildThisFileDirectory)Resources\" SkipUnchangedFiles="true" />
+diff --git a/sdk/HIDMaestro.Core/HMContext.cs b/sdk/HIDMaestro.Core/HMContext.cs
+index 7b43781..ebaf6c2 100644
+--- a/sdk/HIDMaestro.Core/HMContext.cs
++++ b/sdk/HIDMaestro.Core/HMContext.cs
+@@ -139,6 +139,19 @@ public sealed class HMContext : IDisposable
+     {
+         ThrowIfDisposed();
+ 
++        // HOJA local build: another HIDMaestro app has controllers up. The sweep below would remove
++        // them, and a full deploy would replace the driver under them, so leave both alone and use
++        // the driver that is installed. Only with none installed does it deploy ours.
++        if (OtherAppHasControllers())
++        {
++            if (DriverBuilder.IsDriverInstalled())
++                return;
++            if (!DriverBuilder.FullDeploy())
++                throw new InvalidOperationException(
++                    "Driver install failed. Run elevated and check pnputil output.");
++            return;
++        }
++
+         // Proactive ghost sweep FIRST, before FullDeploy. Without this, when a
+         // prior process crashed or was force-killed (Dispose never ran), its
+         // virtual controllers + HIDMAESTRO stay PnP-live and REMAIN BOUND to
+@@ -177,6 +190,11 @@ public sealed class HMContext : IDisposable
+     /// orphans from previous runs that weren't cleanly disposed. Use this from
+     /// a "cleanup" command-line command. Static (no HMContext instance needed).
+     /// Requires admin.</summary>
++    /// <summary>HOJA local build: true while another HIDMaestro app has a virtual controller up.
++    /// The machine-wide sweeps (<see cref="RemoveAllVirtualControllers()"/>, and the one
++    /// <see cref="InstallDriver"/> starts with) would remove its devices too.</summary>
++    public static bool OtherAppHasControllers() => Internal.SharedMemoryIO.AnyIndexTakenElsewhere();
++
+     public static void RemoveAllVirtualControllers()
+     {
+         Internal.DeviceOrchestrator.RemoveAllVirtualControllers();
+@@ -371,7 +389,8 @@ public sealed class HMContext : IDisposable
+         lock (_lock)
+         {
+             index = 0;
+-            while (_controllers.ContainsKey(index)) index++;
++            // HOJA local build: and not one another HIDMaestro app's controller holds
++            while (_controllers.ContainsKey(index) || Internal.SharedMemoryIO.IsIndexTakenElsewhere(index)) index++;
+         }
+         var identity = Internal.DeviceIdentity.Resolve(identityKey, index);
+         ThrowIfIdentityInUse(identity);
+@@ -474,6 +493,9 @@ public sealed class HMContext : IDisposable
+                 throw new InvalidOperationException(
+                     $"Controller index {index} is already in use. Dispose the existing controller first.");
+         }
++        // HOJA local build: nor one another HIDMaestro app holds
++        if (Internal.SharedMemoryIO.IsIndexTakenElsewhere(index))
++            throw new InvalidOperationException($"Controller index {index} is in use by another HIDMaestro app.");
+         var identity = Internal.DeviceIdentity.Resolve(identityKey, index);
+         ThrowIfIdentityInUse(identity);
+ 
 diff --git a/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs b/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs
 index 05b151d..1fef953 100644
 --- a/sdk/HIDMaestro.Core/Internal/DeviceOrchestrator.cs
@@ -368,6 +424,66 @@ index 0000000..30d4490
 +internal sealed partial class ProfileJsonContext : JsonSerializerContext
 +{
 +}
+diff --git a/sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs b/sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs
+index ad51894..1153b8e 100644
+--- a/sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs
++++ b/sdk/HIDMaestro.Core/Internal/SharedMemoryIO.cs
+@@ -237,6 +237,32 @@ internal static class SharedMemoryIO
+     /// creating the section on first call. Thread-safe via per-call lock
+     /// callers can issue concurrent EnsureInputMapping requests for distinct
+     /// controllerIndex values without races. Idempotent for the same index.</summary>
++    /// <summary>HOJA local build: whether another process's controller already holds this index.
++    /// The sections are machine-wide and every SDK consumer numbers from 0, so two HIDMaestro apps
++    /// running at once would otherwise share one input section, each device reading the other's
++    /// reports.</summary>
++    public static bool IsIndexTakenElsewhere(int controllerIndex)
++    {
++        lock (s_inputViews)
++            if (s_inputViews.ContainsKey(controllerIndex))
++                return false; // This process's own
++        IntPtr h = OpenFileMappingW(FILE_MAP_READ, false, $@"Global\HIDMaestroInput{controllerIndex}");
++        if (h == IntPtr.Zero)
++            return false;
++        CloseHandle(h);
++        return true;
++    }
++
++    /// <summary>HOJA local build: whether another process has a controller on any of the first
++    /// <paramref name="count"/> indexes, i.e. another HIDMaestro app is running one.</summary>
++    public static bool AnyIndexTakenElsewhere(int count = 32)
++    {
++        for (int i = 0; i < count; i++)
++            if (IsIndexTakenElsewhere(i))
++                return true;
++        return false;
++    }
++
+     public static IntPtr EnsureInputMapping(int controllerIndex)
+     {
+         lock (s_inputViews)
+@@ -906,6 +932,9 @@ internal static class SharedMemoryIO
+     [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CloseHandle")]
+     private static extern bool CloseHandle(IntPtr hObject);
+ 
++    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
++    private static extern IntPtr OpenFileMappingW(uint dwDesiredAccess, bool bInheritHandle, string lpName);
++
+     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+     private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+         string StringSecurityDescriptor, uint StringSDRevision,
+diff --git a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs
+index 663aba6..c47e155 100644
+--- a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs
++++ b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipBackend.cs
+@@ -61,6 +61,8 @@ internal static class UsbipBackend
+     private static void SweepStaleOnce(int currentPort)
+     {
+         if (Interlocked.Exchange(ref s_staleSweepDone, 1) != 0) return;
++        // HOJA local build: another HIDMaestro app's imports sit in the same port range
++        if (HMContext.OtherAppHasControllers()) return;
+         try
+         {
+             foreach (var row in VhciClient.GetImportedDevices())
 diff --git a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs b/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs
 index 35d708c..5f8eb87 100644
 --- a/sdk/HIDMaestro.Core/Internal/Usbip/UsbipDriverInstaller.cs
