@@ -3,6 +3,7 @@
 // is not a connected gamepad: reads just wait until it is back.
 
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
 namespace HhlGamepadLink;
@@ -14,9 +15,11 @@ sealed unsafe partial class LinkDevice : IDisposable
     public int InputLength { get; }
     public int OutputLength { get; }
 
-    readonly SafeFileHandle _handle; // Overlapped: a read and a write can be in flight together (RandomAccess)
+    readonly SafeFileHandle _handle; // Overlapped: a read and a write can be in flight together
     readonly object _writeLock = new();
+    const uint WriteTimeoutMs = 500;  // A write to a gamepad that is away can wait; give up on it
     volatile bool _closed;
+    int _disposed;
     public bool Closed => _closed;
 
     LinkDevice(string path, string id, SafeFileHandle handle, int inputLength, int outputLength)
@@ -45,11 +48,15 @@ sealed unsafe partial class LinkDevice : IDisposable
                 SetupDiGetDeviceInterfaceDetailW(set, ref iface, null, 0, ref needed, 0);
                 if (needed == 0)
                     continue;
-                byte* detail = stackalloc byte[(int)needed];
-                *(uint*)detail = 8; // cbSize of SP_DEVICE_INTERFACE_DETAIL_DATA_W on x64
-                if (!SetupDiGetDeviceInterfaceDetailW(set, ref iface, detail, needed, ref needed, 0))
-                    continue;
-                string path = new string((char*)(detail + 4));
+                var buffer = new byte[needed];
+                string path;
+                fixed (byte* detail = buffer)
+                {
+                    *(uint*)detail = 8; // cbSize of SP_DEVICE_INTERFACE_DETAIL_DATA_W on x64
+                    if (!SetupDiGetDeviceInterfaceDetailW(set, ref iface, detail, needed, ref needed, 0))
+                        continue;
+                    path = new string((char*)(detail + 4));
+                }
                 if (IsLink(path))
                     paths.Add(path);
             }
@@ -97,23 +104,63 @@ sealed unsafe partial class LinkDevice : IDisposable
         return new LinkDevice(path, id, h, caps.InputReportByteLength, caps.OutputReportByteLength);
     }
 
+    // One overlapped transfer, waited for here; false when it failed, timed out or was cancelled.
+    // Its buffer and OVERLAPPED are let go only once its event says the transfer has ended, and the
+    // result is read from the OVERLAPPED, so a Dispose meanwhile (which cancels it) is safe.
+    bool Transfer(bool write, byte[] buffer, uint timeoutMs, out uint done)
+    {
+        done = 0;
+        var ov = (NativeOverlapped*)NativeMemory.AllocZeroed((nuint)sizeof(NativeOverlapped));
+        nint ev = CreateEventW(0, true, false, null);
+        var pin = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            ov->EventHandle = ev;
+            byte* b = (byte*)pin.AddrOfPinnedObject();
+            uint n = 0;
+            bool started;
+            try
+            {
+                started = write ? WriteFile(_handle, b, (uint)buffer.Length, &n, ov)
+                                : ReadFile(_handle, b, (uint)buffer.Length, &n, ov);
+            }
+            catch (ObjectDisposedException)
+            {
+                return false; // Closed before it started
+            }
+            if (!started && Marshal.GetLastPInvokeError() != ErrorIoPending)
+                return false;
+            if (WaitForSingleObject(ev, timeoutMs) != 0)
+            {
+                try { CancelIoEx(_handle, ov); }
+                catch (ObjectDisposedException) { } // Dispose has cancelled it already
+                WaitForSingleObject(ev, Infinite);   // Until it has ended
+            }
+            done = (uint)ov->InternalHigh;
+            return ov->InternalLow == 0; // STATUS_SUCCESS
+        }
+        finally
+        {
+            pin.Free();
+            CloseHandle(ev);
+            NativeMemory.Free(ov);
+        }
+    }
+
     // The next input report (report ID first); null once the device is gone or closed
     public byte[]? Read()
     {
         var buffer = new byte[InputLength];
-        try
-        {
-            int n = RandomAccess.Read(_handle, buffer, 0);
-            return n > 0 ? buffer[..n] : null;
-        }
-        catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or UnauthorizedAccessException)
+        if (_closed || !Transfer(false, buffer, Infinite, out uint n) || n == 0)
         {
             _closed = true;
             return null;
         }
+        return buffer[..(int)n];
     }
 
-    // Report 3: [lane][length][payload], padded to the report's size
+    // Report 3: [lane][length][payload], padded to the report's size. A disconnected gamepad's
+    // writes fail; the device stays, and works again when the gamepad is back.
     public bool Send(byte lane, ReadOnlySpan<byte> payload)
     {
         if (_closed || payload.Length > Protocol.MessageMax || OutputLength < 3 + payload.Length)
@@ -124,23 +171,15 @@ sealed unsafe partial class LinkDevice : IDisposable
         report[2] = (byte)payload.Length;
         payload.CopyTo(report.AsSpan(3));
         lock (_writeLock)
-        {
-            try
-            {
-                RandomAccess.Write(_handle, report, 0);
-                return true;
-            }
-            catch (Exception e) when (e is IOException or ObjectDisposedException or OperationCanceledException or UnauthorizedAccessException)
-            {
-                // A disconnected gamepad's writes fail; the device stays, and works when it is back
-                return false;
-            }
-        }
+            return Transfer(true, report, WriteTimeoutMs, out _);
     }
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         _closed = true;
+        CancelIoEx(_handle, null); // The reader's pending read ends
         _handle.Dispose();
     }
 
@@ -148,6 +187,8 @@ sealed unsafe partial class LinkDevice : IDisposable
     const uint FileShareRead = 1, FileShareWrite = 2, OpenExisting = 3, FileFlagOverlapped = 0x40000000;
     const uint DigcfPresent = 2, DigcfDeviceInterface = 0x10;
     const int HidpStatusSuccess = 0x00110000;
+    const int ErrorIoPending = 997;
+    const uint Infinite = 0xFFFFFFFF;
 
     [StructLayout(LayoutKind.Sequential)]
     struct SpDeviceInterfaceData { public int cbSize; public Guid InterfaceClassGuid; public uint Flags; public nint Reserved; }
@@ -173,6 +214,18 @@ sealed unsafe partial class LinkDevice : IDisposable
     [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     private static partial SafeFileHandle CreateFileW(string name, uint access, uint share, nint security, uint creation,
                                                       uint flags, nint template);
+    [LibraryImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ReadFile(SafeFileHandle h, byte* buffer, uint length, uint* done, NativeOverlapped* ov);
+    [LibraryImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WriteFile(SafeFileHandle h, byte* buffer, uint length, uint* done, NativeOverlapped* ov);
+    [LibraryImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CancelIoEx(SafeFileHandle h, NativeOverlapped* ov);
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial nint CreateEventW(nint security, [MarshalAs(UnmanagedType.Bool)] bool manualReset,
+                                             [MarshalAs(UnmanagedType.Bool)] bool initialState, string? name);
+    [LibraryImport("kernel32.dll")] private static partial uint WaitForSingleObject(nint handle, uint ms);
+    [LibraryImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint handle);
     [LibraryImport("setupapi.dll", StringMarshalling = StringMarshalling.Utf16)]
     private static partial nint SetupDiGetClassDevsW(ref Guid guid, string? enumerator, nint parent, uint flags);
     [LibraryImport("setupapi.dll")] [return: MarshalAs(UnmanagedType.Bool)]

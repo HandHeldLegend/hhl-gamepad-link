@@ -21,6 +21,9 @@ const int TrayRateBase = 100, TrayModeBase = 1000;
 string trayKey = "";
 var trayPads = new List<string>();
 
+// Anything that would end the app goes to the log first
+Log.CatchUnhandled();
+
 // One copy per PC: each sweeps away the controllers a killed run left behind
 using var single = new Mutex(initiallyOwned: true, @"Global\HhlGamepadLink", out bool firstCopy);
 if (!firstCopy)

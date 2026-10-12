@@ -60,7 +60,8 @@ sealed class LinkHub : IDisposable
             long now = Environment.TickCount64;
             if (now >= nextScan)
             {
-                Scan();
+                try { Scan(); }
+                catch (Exception e) { Log.Write($"Link scan: {e}"); }
                 nextScan = now + 1000;
             }
             lock (_lock)
@@ -69,12 +70,12 @@ sealed class LinkHub : IDisposable
                 {
                     foreach (var s in _sessions.Values)
                         if (!_refused.Contains(s.Id))
-                            s.Heartbeat();
+                            Guard(s, s.Heartbeat);
                     nextBeat = now + HeartbeatMs;
                 }
                 foreach (var s in _sessions.Values)
                 {
-                    s.Tick();
+                    Guard(s, s.Tick);
                     if (s.State != SessionState.Closed && s.SilentMs > AwayAfterMs && s.Pad != null)
                         s.Close("Gamepad went away", CloseReason.WentAway);
                 }
@@ -114,10 +115,21 @@ sealed class LinkHub : IDisposable
                         session.SetMode(format);
                     _sessions[device.Id] = session;
                 }
-                session.Attach(device);
+                Guard(session, () => session.Attach(device));
             }
             new Thread(() => ReadLoop(device)) { IsBackground = true, Priority = ThreadPriority.AboveNormal,
                                                  Name = $"Link {device.Id}" }.Start();
+        }
+    }
+
+    // One gamepad's fault closes that gamepad, not the app
+    static void Guard(PadSession session, Action work)
+    {
+        try { work(); }
+        catch (Exception e)
+        {
+            Log.Write($"{session.Id}: {e}");
+            session.Close($"Error: {e.Message}", CloseReason.Closed);
         }
     }
 
@@ -133,12 +145,7 @@ sealed class LinkHub : IDisposable
             {
                 if (!_sessions.TryGetValue(device.Id, out var session) || _refused.Contains(device.Id))
                     continue;
-                try { session.OnReport(report, arrivalUs); }
-                catch (Exception e)
-                {
-                    // One gamepad's fault closes that gamepad, not the app
-                    session.Close($"Error: {e.Message}", CloseReason.Closed);
-                }
+                Guard(session, () => session.OnReport(report, arrivalUs));
             }
         }
     }
