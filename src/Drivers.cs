@@ -28,7 +28,7 @@ sealed class Drivers
     public static string? Working { get; private set; }
 
     readonly HMContext _ctx;
-    readonly Func<BluetoothHub?> _hub;
+    readonly Func<LinkHub?> _hub;
     readonly bool[] _installed = new bool[2];
     Which? _busy;
     Task? _work;
@@ -36,7 +36,7 @@ sealed class Drivers
     public string Note { get; private set; } = "";
     public event Action? ControllerDriverInstalled;
 
-    public Drivers(HMContext ctx, Func<BluetoothHub?> hub)
+    public Drivers(HMContext ctx, Func<LinkHub?> hub)
     {
         _ctx = ctx;
         _hub = hub;

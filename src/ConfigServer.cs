@@ -20,11 +20,11 @@ sealed class ConfigServer : IDisposable
 
     static readonly string[] AllowedOrigins = { "https://handheldlegend.github.io" };
 
-    readonly BluetoothHub _hub;
+    readonly LinkHub _hub;
     readonly HttpListener _listener = new();
     readonly CancellationTokenSource _stop = new();
 
-    public ConfigServer(BluetoothHub hub)
+    public ConfigServer(LinkHub hub)
     {
         _hub = hub;
         _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");

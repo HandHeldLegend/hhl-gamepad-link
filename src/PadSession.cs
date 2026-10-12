@@ -1,11 +1,11 @@
-// One gamepad connected to this PC over Bluetooth: tells it what this PC wants (mode and report
-// rate), presents it as the device for its mode, and plays its samples to that device at the
-// spacing the gamepad took them (see Playout). In Slippi mode the device is a port on the GameCube
-// adapter that every Slippi gamepad here shares (see GcAdapter).
+// One gamepad in Link mode on this PC: tells it what this PC wants (mode and report rate, every
+// second, which also tells it the app is here), presents it as the device for its mode, and plays
+// its samples to that device at the spacing the gamepad took them (see Playout). In Slippi mode the
+// device is a port on the GameCube adapter that every Slippi gamepad here shares (see GcAdapter).
 //
-// Threads: the gamepad's reader thread calls OnFrame and the session thread Tick (both under the
-// hub's lock); HIDMaestro raises output reports on its own thread (they go straight out); the
-// report clock submits to the device; creating and removing the device run in the background,
+// Threads: the device's reader thread calls OnReport and the hub's thread Heartbeat and Tick (all
+// under the hub's lock); HIDMaestro raises output reports on its own thread (they go straight out);
+// the report clock submits to the device; creating and removing the device run in the background,
 // because each takes seconds.
 
 using System.Buffers.Binary;
@@ -40,7 +40,9 @@ sealed class PadSession
 
     readonly HMContext _ctx;
     readonly GcAdapter _adapter;
-    readonly RfcommSocket _link;
+    LinkDevice? _link; // The gamepad's Link collection; the hub opens it
+    long _lastReportMs = Environment.TickCount64;
+    public long SilentMs => Environment.TickCount64 - _lastReportMs;
 
     public string Id { get; }                     // The gamepad's Bluetooth address
     public PadIdentity? Pad { get; private set; } // Its identity, once it has said who it is
@@ -94,15 +96,22 @@ sealed class PadSession
         _ => (_reports.DelayUs, _reports.LateShare),
     };
 
-    public PadSession(HMContext ctx, GcAdapter adapter, string id, RfcommSocket link, int rateHz)
+    public PadSession(HMContext ctx, GcAdapter adapter, string id, int rateHz)
     {
         _ctx = ctx;
         _adapter = adapter;
         Id = id;
-        _link = link;
         _rateHz = rateHz;
+    }
+
+    public void Attach(LinkDevice link)
+    {
+        _link = link;
         SendHost(); // The gamepad waits for it before it says who it is
     }
+
+    // Every second: the gamepad (re)starts on it, and goes back to a dongle without it
+    public void Heartbeat() => SendHost();
 
     // The mode this PC wants the gamepad in, for this run (0 for none): it follows unless its mode
     // was chosen on the gamepad itself
@@ -123,29 +132,33 @@ sealed class PadSession
         SendHost();
     }
 
-    void SendHost() => Send(Protocol.Host(_wantedFormat, Updates.CurrentNumber, _rateHz));
+    void SendHost() => Send(Protocol.LaneMessage, Protocol.Host(_wantedFormat, Updates.CurrentNumber, _rateHz));
 
-    void Send(byte[] frame)
+    // A disconnected gamepad's writes fail: its silence says it is away, not this
+    void Send(byte lane, ReadOnlySpan<byte> payload)
     {
-        if (State != SessionState.Closed && !_link.Send(frame))
-            Close("Gamepad went away", CloseReason.WentAway);
+        if (Reason != CloseReason.Closed)
+            _link?.Send(lane, payload);
     }
 
-    public void OnFrame(byte lane, ReadOnlySpan<byte> payload, long arrivalUs)
+    public void OnReport(byte[] report, long arrivalUs)
     {
-        if (State == SessionState.Closed)
+        if (Reason == CloseReason.Closed || report.Length < 3)
             return;
-        switch (lane)
+        _lastReportMs = Environment.TickCount64;
+        switch (report[0])
         {
-        case Protocol.LaneInput:
-            if (payload.Length >= 7)
-                OnInput(BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(2)), payload.Slice(6), arrivalUs);
+        case Protocol.ReportLive:
+            // [seq u16][sampled_us u32][length u8][report]
+            if (report.Length >= 8 && Pad != null && State != SessionState.Closed)
+                OnInput(BinaryPrimitives.ReadUInt32LittleEndian(report.AsSpan(3)), report.AsSpan(7), arrivalUs);
             break;
-        case Protocol.LaneBulk:
-            ConfigFromGamepad?.Invoke(payload.ToArray()); // The config app's live view
-            break;
-        case Protocol.LaneMessage:
-            if (payload.Length >= 1)
+        case Protocol.ReportMessage:
+            int len = Math.Min(report[2], report.Length - 3);
+            var payload = report.AsSpan(3, len);
+            if (report[1] == Protocol.LaneBulk && State != SessionState.Closed)
+                ConfigFromGamepad?.Invoke(payload.ToArray()); // The config app's live view
+            else if (report[1] == Protocol.LaneMessage && len >= 1)
                 OnMessage(payload[0], payload.Slice(1));
             break;
         }
@@ -161,6 +174,13 @@ sealed class PadSession
                 Fail("Can't open", "The gamepad's firmware speaks another link version");
                 return;
             }
+            if (State == SessionState.Closed && Reason == CloseReason.WentAway)
+            {
+                // Back: open it again
+                State = SessionState.Opening;
+                Reason = CloseReason.None;
+                Problem = null;
+            }
             // A new mode: its device goes, and the one for the new mode comes up
             if (_deviceFormat != 0xFF && pad.Format != _deviceFormat)
                 RemoveDevice();
@@ -170,7 +190,7 @@ sealed class PadSession
                 State = SessionState.Starting;
                 Status = "Starting…";
             }
-            Send(Protocol.Status(1)); // Adopted, as player 1
+            Send(Protocol.LaneStatus, Protocol.Status(1)); // Adopted, as player 1
             if (pad.Format is not (Protocol.FormatSInput or Protocol.FormatXInput or Protocol.FormatSlippi))
                 Fail("Can't open", $"{Protocol.FormatName(pad.Format)} mode isn't supported on a PC");
             break;
@@ -183,14 +203,13 @@ sealed class PadSession
         }
     }
 
-    // A live input report: [full length][report, trailing zeros cut], sampled at the gamepad's time
-    void OnInput(uint sampled, ReadOnlySpan<byte> trimmed, long arrivalUs)
+    // A live input report: [length][report], sampled at the gamepad's time
+    void OnInput(uint sampled, ReadOnlySpan<byte> lengthAndReport, long arrivalUs)
     {
-        int full = trimmed[0];
-        if (Pad == null || full > 64 || trimmed.Length - 1 > full)
+        int full = lengthAndReport[0];
+        if (Pad == null || full > 64 || lengthAndReport.Length - 1 < full)
             return;
-        var report = new byte[full];
-        trimmed.Slice(1).CopyTo(report);
+        var report = lengthAndReport.Slice(1, full).ToArray();
 
         if (_haveSampled && sampled < _lastSampled && _lastSampled - sampled > 0x80000000u)
             _sampledBase += 1L << 32;
@@ -291,7 +310,7 @@ sealed class PadSession
     // ---- The config app ----
 
     // The link is reliable and in order: config commands go straight out
-    public void SendConfig(byte[] packet) => Send(Protocol.Message(Protocol.MsgConfig, packet));
+    public void SendConfig(byte[] packet) => Send(Protocol.LaneMessage, Protocol.Message(Protocol.MsgConfig, packet));
 
     public void Close(string why, CloseReason reason)
     {
@@ -300,7 +319,6 @@ sealed class PadSession
         State = SessionState.Closed;
         Status = why;
         Reason = reason;
-        _link.Dispose(); // The gamepad sees the link go
         RemoveDevice();
     }
 
@@ -423,7 +441,7 @@ sealed class PadSession
     }
 
     // Output reports (rumble, LEDs, SInput commands) go straight to the gamepad
-    void SendOutput(byte[] report) => Send(Protocol.Message(Protocol.MsgOutput, report));
+    void SendOutput(byte[] report) => Send(Protocol.LaneMessage, Protocol.Message(Protocol.MsgOutput, report));
 
     // Command replies go to the host at once; samples when their time comes. The driver delivers
     // every other frame on this path, so each one is submitted twice.

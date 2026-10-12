@@ -2,7 +2,7 @@
 
 # HHL Gamepad Link
 
-Use a HOJA gamepad over Bluetooth on a Windows PC, the way it works with a HOJA dongle. The gamepad connects to this app, and the app turns it into a real controller on the PC, in SInput, XInput or Slippi mode. Steam and games see it like any other controller, and Dolphin sees gamepads in Slippi mode as a GameCube adapter.
+Use a HOJA gamepad over Bluetooth on a Windows PC, the way it works with a HOJA dongle. In Link mode the gamepad connects to this PC as a Bluetooth device of its own, this app takes the dongle's place, and turns it into a real controller on the PC, in SInput, XInput or Slippi mode. Steam and games see it like any other controller, and Dolphin sees gamepads in Slippi mode as a GameCube adapter.
 
 - **Switch modes without re-pairing.** Pick SInput, XInput or Slippi from the gamepad's card or the tray icon. The gamepad changes mode over the same connection.
 - **One portable .exe.** There's no installer and no registry settings. The one setting it keeps, Close to tray, is in `%LOCALAPPDATA%\HHL Gamepad Link`.
@@ -22,11 +22,15 @@ The app asks for administrator rights. It needs them to install the virtual cont
 
 ## Connecting a gamepad
 
-The gamepad needs firmware with the Bluetooth link to this app. Pair it with the PC once, in Windows' Bluetooth settings, then start it in Bluetooth mode. It connects to the app and shows up in the list.
+The gamepad needs firmware with Link mode.
 
-The app publishes its Bluetooth service as "HHL Gamepad Link". It needs no driver for that: it's an ordinary Bluetooth serial (RFCOMM) service.
+1. Start the gamepad in dongle mode with pairing (the wireless pairing combo). For the first 30 seconds it can be found as **"<name> Link"**.
+2. In Windows, open **Settings → Bluetooth & devices → Add device → Bluetooth** and pick "<name> Link".
+3. From then on, starting the gamepad in dongle mode connects it to this PC whenever the app is running. Without the app, it looks for a HOJA dongle instead.
 
-A gamepad you disconnect from the app stays away until you click **Open** on its card. A gamepad that drops out reconnects on its own when it's back.
+Link mode is a Bluetooth HID device with a vendor-defined collection: games and Windows don't see it as a controller, and the app reads it without a driver. Its own address keeps it apart from the gamepad's other Bluetooth modes, so pairing it doesn't disturb them.
+
+A gamepad you disconnect from the app goes back to looking for a dongle, and stays away from the app until you click **Open** on its card. A gamepad that drops out reconnects on its own when it's back.
 
 ## Slippi and Dolphin
 
@@ -61,7 +65,8 @@ The layout:
 | Path | What |
 | --- | --- |
 | `src/` | The app (C#, compiled ahead of time into one native .exe) |
-| `src/Protocol.cs` | What the gamepad and the app say over Bluetooth: the HOJA dongle link, framed for RFCOMM |
+| `src/Protocol.cs` | What the gamepad and the app say: the HOJA dongle link, in Link mode's HID reports |
+| `src/HidLink.cs` | Finds and opens a gamepad's Link collection with `hid.dll` |
 | `native/` | The window: `hhl_ui.cpp` with [Dear ImGui](https://github.com/ocornut/imgui) |
 | `external/HIDMaestro` | [HIDMaestro](https://github.com/hifihedgehog/HIDMaestro), the virtual controller driver, pinned |
 | `patches/` | Our build changes to HIDMaestro |

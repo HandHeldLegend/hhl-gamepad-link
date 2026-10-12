@@ -53,8 +53,7 @@ var driverReady = Task.Run(() =>
         HMContext.RemoveAllVirtualControllers(preserveInstall: true);
     ctx.InstallDriver();
 });
-BluetoothHub? hub = null;
-long nextHubTry = 0;
+LinkHub? hub = null;
 ConfigServer? config = null;
 var drivers = new Drivers(ctx, () => hub);
 drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask; // Installed from the Drivers window
@@ -62,25 +61,16 @@ drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask; // 
 NativeUi.Frame frame;
 while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
 {
-    if (hub == null && driverReady.IsCompleted && Environment.TickCount64 >= nextHubTry)
+    if (hub == null && driverReady.IsCompleted)
     {
         if (driverReady.IsFaulted)
             message = $"The driver didn't install: {driverReady.Exception!.InnerException!.Message}";
         else
         {
-            try
-            {
-                hub = new BluetoothHub(ctx, rates[rateIndex]);
-                message = hub.Problem is string p ? $"Ready, channel {hub.Channel} ({p})" : "Ready";
-                try { config = new ConfigServer(hub); }
-                catch (Exception e) { message += $" (config app link unavailable: {e.Message})"; }
-            }
-            catch (BluetoothException e)
-            {
-                // No Bluetooth radio, or it is switched off: try again shortly
-                message = $"Bluetooth isn't available: {e.Message}";
-                nextHubTry = Environment.TickCount64 + 5000;
-            }
+            hub = new LinkHub(ctx, rates[rateIndex]);
+            message = "Ready";
+            try { config = new ConfigServer(hub); }
+            catch (Exception e) { message = $"Ready (config app link unavailable: {e.Message})"; }
         }
     }
 
@@ -107,7 +97,7 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
 
     var pads = hub?.Snapshot() ?? Array.Empty<PadEntry>();
     if (pads.Count == 0)
-        NativeUi.Empty(hub == null ? "Starting…" : "Waiting for gamepads to connect over Bluetooth…");
+        NativeUi.Empty(hub == null ? "Starting…" : "Waiting for gamepads in Link mode. Pair one as “<name> Link” in Bluetooth settings.");
 
     foreach (var pad in pads)
         DrawCard(pad);

@@ -1,16 +1,16 @@
-// What a gamepad and this app say to each other over Bluetooth: the HOJA dongle link
-// (HOJA-LIB-DONGLE include/dongle_link.h), with this app in the dongle's place. The gamepad pages
-// this PC and opens an RFCOMM channel to the app's service; RFCOMM is one reliable byte stream, so
-// each piece travels as a frame:
+// What a gamepad and this app say to each other: the HOJA dongle link (HOJA-LIB-DONGLE
+// include/dongle_link.h, "Link mode"), with this app in the dongle's place. The gamepad meets this
+// PC as a Bluetooth HID device of its own ("<name> Link"): a vendor-defined collection, which any
+// app opens without a driver, in three reports:
 //
-//   [lane u8][length u8][payload]
+//   report   direction      layout
+//   -------  -------------  ------------------------------------------------------------------
+//   1 live   gamepad -> PC  [seq u16][sampled_us u32][length u8][report, 64]
+//   2 msg    gamepad -> PC  [lane u8][length u8][payload]: the gamepad's messages and live WebUSB report
+//   3 out    PC -> gamepad  [lane u8][length u8][payload]: this app's messages and status
 //
-//   lane          direction      payload
-//   ------------  -------------  ------------------------------------------------------------
-//   1 input       gamepad -> PC  [seq u16][sampled_us u32][full length][report, trailing zeros cut]
-//   2 bulk        gamepad -> PC  the gamepad's live WebUSB report, for the config app
-//   3 message     both           [dongle_link_msg_t][payload]: HOST, WAKE, REPORT, OUTPUT, CONFIG
-//   4 status      PC -> gamepad  dongle_status_s: rumble and player number
+//   lanes: 2 bulk (live WebUSB report), 3 message ([dongle_link_msg_t][payload]: HOST, WAKE,
+//   REPORT, OUTPUT, CONFIG), 4 status (dongle_status_s)
 //
 // Everything is little endian and packed.
 
@@ -21,13 +21,10 @@ namespace HhlGamepadLink;
 
 static class Protocol
 {
-    // The app's RFCOMM service, published in SDP. Gamepads without an SDP lookup call
-    // FixedChannel; the app binds it when it is free.
-    public static readonly Guid ServiceUuid = new("bbebd868-289d-4930-81dd-45d882b64bbf");
-    public const int FixedChannel = 5;
-    public const string ServiceName = "HHL Gamepad Link";
-
-    public const byte LaneInput = 1, LaneBulk = 2, LaneMessage = 3, LaneStatus = 4;
+    public const ushort UsagePage = 0xFF48, Usage = 0x4C;
+    public const byte ReportLive = 1, ReportMessage = 2, ReportOut = 3;
+    public const byte LaneBulk = 2, LaneMessage = 3, LaneStatus = 4;
+    public const int MessageMax = 65; // DONGLE_LINK_MSG_MAX: a type byte and 64
 
     // dongle_link_msg_t
     public const byte MsgHost = 1, MsgWake = 2, MsgReport = 3, MsgOutput = 4, MsgConfig = 5;
@@ -75,21 +72,13 @@ static class Protocol
         _ => 15,           // DONGLE_MODE_UNKNOWN: the gamepad keeps its own
     };
 
-    public static byte[] Frame(byte lane, ReadOnlySpan<byte> payload)
-    {
-        var f = new byte[2 + payload.Length];
-        f[0] = lane;
-        f[1] = (byte)payload.Length;
-        payload.CopyTo(f.AsSpan(2));
-        return f;
-    }
-
+    // A dongle_link message: [type][payload]
     public static byte[] Message(byte type, ReadOnlySpan<byte> payload)
     {
-        var m = new byte[1 + Math.Min(payload.Length, 64)];
+        var m = new byte[1 + Math.Min(payload.Length, MessageMax - 1)];
         m[0] = type;
         payload.Slice(0, m.Length - 1).CopyTo(m.AsSpan(1));
-        return Frame(LaneMessage, m);
+        return m;
     }
 
     // dongle_link_host_s: what this "dongle" is plugged into (a PC), the mode wanted for it, and
@@ -107,7 +96,7 @@ static class Protocol
     }
 
     // dongle_status_s: rumble is passed through output reports, so only the player number
-    public static byte[] Status(byte player) => Frame(LaneStatus, new byte[] { 1, player, 0, 0, 0, 0 });
+    public static byte[] Status(byte player) => new byte[] { 1, player, 0, 0, 0, 0 };
 
     public static string Text(ReadOnlySpan<byte> field)
     {
