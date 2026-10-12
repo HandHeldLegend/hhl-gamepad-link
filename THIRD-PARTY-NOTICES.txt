@@ -1,4 +1,4 @@
-HHL Gamepad WLAN includes the following third-party software.
+HHL Gamepad Link includes the following third-party software.
 
 ================================================================================
 HIDMaestro (https://github.com/hifihedgehog/HIDMaestro)

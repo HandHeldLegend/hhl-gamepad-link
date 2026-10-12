@@ -1,9 +1,9 @@
-// HHL Gamepad WLAN: lists the HOJA gamepads on the home network and opens them on this PC as their
-// own controllers. One gamepad is open on one PC at a time; opening it here while another PC has
-// it moves it here.
+// HHL Gamepad Link: HOJA gamepads connect to this PC over Bluetooth, as they would to a HOJA
+// dongle, and are opened here as their own controllers. The app picks their mode and report rate,
+// so switching mode needs no new pairing or reconnect.
 
 using HIDMaestro;
-using HhlGamepadWlan;
+using HhlGamepadLink;
 
 int[] rates = { 125, 250, 500 };
 string[] rateLabels = rates.Select(r => $"{r} Hz").ToArray();
@@ -22,14 +22,15 @@ string trayKey = "";
 var trayPads = new List<string>();
 
 // One copy per PC: each sweeps away the controllers a killed run left behind
-using var single = new Mutex(initiallyOwned: true, @"Global\HhlGamepadWlan", out bool firstCopy);
+using var single = new Mutex(initiallyOwned: true, @"Global\HhlGamepadLink", out bool firstCopy);
 if (!firstCopy)
     return 0;
 
 // --tray: started with Windows, so it starts hidden in the notification area
 bool startHidden = args.Contains("--tray");
-if (!NativeUi.Open("HHL Gamepad WLAN", 620, 480, startHidden))
+if (!NativeUi.Open("HHL Gamepad Link", 620, 480, startHidden))
     return 1;
+Autostart.AdoptOldTask();
 bool startWithWindows = Autostart.IsOn();
 Settings.Load();
 bool closeToTray = Settings.CloseToTray; // Kept between runs (Settings)
@@ -52,7 +53,8 @@ var driverReady = Task.Run(() =>
         HMContext.RemoveAllVirtualControllers(preserveInstall: true);
     ctx.InstallDriver();
 });
-LanHub? hub = null;
+BluetoothHub? hub = null;
+long nextHubTry = 0;
 ConfigServer? config = null;
 var drivers = new Drivers(ctx, () => hub);
 drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask; // Installed from the Drivers window
@@ -60,16 +62,25 @@ drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask; // 
 NativeUi.Frame frame;
 while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
 {
-    if (hub == null && driverReady.IsCompleted)
+    if (hub == null && driverReady.IsCompleted && Environment.TickCount64 >= nextHubTry)
     {
         if (driverReady.IsFaulted)
             message = $"The driver didn't install: {driverReady.Exception!.InnerException!.Message}";
         else
         {
-            hub = new LanHub(ctx, rates[rateIndex]);
-            message = $"Ready on {hub.PcName}";
-            try { config = new ConfigServer(hub); }
-            catch (Exception e) { message = $"Ready on {hub.PcName} (config app link unavailable: {e.Message})"; }
+            try
+            {
+                hub = new BluetoothHub(ctx, rates[rateIndex]);
+                message = hub.Problem is string p ? $"Ready, channel {hub.Channel} ({p})" : "Ready";
+                try { config = new ConfigServer(hub); }
+                catch (Exception e) { message += $" (config app link unavailable: {e.Message})"; }
+            }
+            catch (BluetoothException e)
+            {
+                // No Bluetooth radio, or it is switched off: try again shortly
+                message = $"Bluetooth isn't available: {e.Message}";
+                nextHubTry = Environment.TickCount64 + 5000;
+            }
         }
     }
 
@@ -87,7 +98,7 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
     if (frame == NativeUi.Frame.Hidden)
         continue;
 
-    int chosen = NativeUi.RateHeader("HHL Gamepad WLAN", "Report rate", rateLabels, rateIndex);
+    int chosen = NativeUi.RateHeader("HHL Gamepad Link", "Report rate", rateLabels, rateIndex);
     if (chosen != rateIndex)
     {
         rateIndex = chosen;
@@ -96,7 +107,7 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
 
     var pads = hub?.Snapshot() ?? Array.Empty<PadEntry>();
     if (pads.Count == 0)
-        NativeUi.Empty(hub == null ? "Starting…" : "Looking for gamepads on the network…");
+        NativeUi.Empty(hub == null ? "Starting…" : "Waiting for gamepads to connect over Bluetooth…");
 
     foreach (var pad in pads)
         DrawCard(pad);
@@ -167,11 +178,7 @@ void DrawCard(PadEntry e)
 {
     var session = e.Session;
     bool here = session is { State: not SessionState.Closed };
-    bool elsewhere = !here && e.Pad.OwnerSession != 0 && e.Pad.OwnerSession != hub!.Session;
-    // With a name set in the config app, the model goes on the details line
-    string mode = e.Pad.UserName.Length > 0
-        ? $"{e.Pad.Name}  ·  {Protocol.FormatName(e.Pad.Format)}"
-        : Protocol.FormatName(e.Pad.Format);
+    string mode = Protocol.FormatName(e.Pad.Format);
 
     string status, button, detail;
     NativeUi.Status colour;
@@ -189,36 +196,27 @@ void DrawCard(PadEntry e)
         bool live = session!.State == SessionState.Open;
         status = live ? "Open here" : session.Status;
         colour = session.Problem != null ? NativeUi.Status.Problem : NativeUi.Status.OpenHere;
-        button = "Close";
+        button = "Disconnect";
         accent = false;
         string port = session.AdapterPort is int n ? $"  ·  adapter port {n}" : "";
         detail = session.Problem != null ? $"{mode}  ·  {session.Problem}"
             : live ? $"{mode}{port}  ·  {session.PacketsPerSecond}/s in" +
                      (session.AdapterPort == null ? $", {session.ReportsPerSecond} Hz out" : "") + "  ·  " +
-                     $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late  ·  {session.RttMs:F1} ms"
-            : $"{mode}  ·  {e.Pad.Rssi} dBm";
-    }
-    else if (elsewhere)
-    {
-        status = $"In use on {e.Pad.OwnerName}";
-        colour = NativeUi.Status.Elsewhere;
-        button = "Claim";
-        accent = false;
-        detail = $"{mode}  ·  {e.Pad.Rssi} dBm";
+                     $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late"
+            : mode;
     }
     else
     {
-        status = "Free";
+        // Disconnected here: turned away until opened again
+        status = "Closed";
         colour = NativeUi.Status.Free;
         button = "Open";
         accent = true;
-        string last = session is { State: SessionState.Closed } s && s.Status != "Closed" ? $"  ·  {s.Status}" : "";
-        detail = $"{mode}  ·  {e.Pad.Rssi} dBm{last}";
+        detail = $"{mode}  ·  connects when it next calls";
     }
 
     // A gamepad open here gets a mode picker
-    var (clicked, picked) = NativeUi.Card(e.Pad.Id, e.Pad.Title, detail, status, colour,
-        e.Away ? 0 : SignalBars(e.Pad.Rssi), button, accent,
+    var (clicked, picked) = NativeUi.Card(e.Pad.Id, e.Pad.Title, detail, status, colour, 0, button, accent,
         here ? modeLabels : null, here ? ModeIndex(session!) : -1);
     if (picked is int m)
         hub!.SetMode(e.Pad.Id, modeFormats[m]);
@@ -229,8 +227,6 @@ void DrawCard(PadEntry e)
         else if (here)
             hub!.Close(e.Pad.Id);
         else
-            hub!.Open(e.Pad.Id);
+            hub!.Allow(e.Pad.Id);
     }
 }
-
-static int SignalBars(int rssi) => rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1;

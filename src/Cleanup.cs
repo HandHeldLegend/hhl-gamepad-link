@@ -4,7 +4,7 @@
 using System.Security.Cryptography.X509Certificates;
 using HIDMaestro;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static class Cleanup
 {

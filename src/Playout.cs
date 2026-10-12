@@ -1,4 +1,4 @@
-// Plays a gamepad's samples out at the spacing it took them, not as the WLAN delivers them.
+// Plays a gamepad's samples out at the spacing it took them, not as the radio delivers them.
 //
 // Each packet carries the gamepad's clock when it was sampled. Arrival minus that is the clock
 // offset plus the trip; the smallest value of the last two seconds is the offset plus the quickest
@@ -7,7 +7,7 @@
 // as it arrives, so it costs a little extra delay, never a lost input. The delay grows while too
 // many are late and shrinks while few are, so most packets play on time with a small buffer.
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 sealed class Playout<T>
 {

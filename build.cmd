@@ -1,5 +1,5 @@
 @echo off
-:: Builds HHL Gamepad WLAN into "build\release\HHL Gamepad WLAN.exe" (one portable file).
+:: Builds HHL Gamepad Link into "build\release\HHL Gamepad Link.exe" (one portable file).
 ::
 :: Needs Visual Studio 2022 with the C++ x64 tools and the Windows SDK 10.0.26100. Everything else
 :: (the .NET 10 SDK and the Windows Driver Kit package) is fetched into .tools\ by
@@ -41,10 +41,10 @@ dotnet build "%HM%\sdk\HIDMaestro.Core\HIDMaestro.Core.csproj" -c Release -v min
 call "%ROOT%native\build.cmd" "%OUT%\native" || exit /b 1
 
 :: The app, compiled ahead of time into one .exe
-dotnet publish "%ROOT%src\HhlGamepadWlan.csproj" -c Release -r win-x64 -o "%OUT%\release" ^
+dotnet publish "%ROOT%src\HhlGamepadLink.csproj" -c Release -r win-x64 -o "%OUT%\release" ^
     -p:HIDMaestroDir="%HM%\sdk\HIDMaestro.Core\bin\Release\net10.0-windows10.0.26100.0\\" ^
     -p:NativeUiLib="%OUT%\native\hhl_ui.lib" || exit /b 1
 del /q "%OUT%\release\*.pdb" 2>nul
 copy /y "%ROOT%THIRD-PARTY-NOTICES.txt" "%OUT%\release\" >nul
 echo.
-echo Built "%OUT%\release\HHL Gamepad WLAN.exe"
+echo Built "%OUT%\release\HHL Gamepad Link.exe"

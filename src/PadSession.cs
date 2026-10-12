@@ -1,29 +1,26 @@
-// One gamepad opened on this PC: keeps it open, presents it as the device for its mode, and plays
-// its samples to that device at the spacing the gamepad took them (see Playout). In Slippi mode the
-// device is a port on the GameCube adapter that every Slippi gamepad here shares (see GcAdapter).
+// One gamepad connected to this PC over Bluetooth: tells it what this PC wants (mode and report
+// rate), presents it as the device for its mode, and plays its samples to that device at the
+// spacing the gamepad took them (see Playout). In Slippi mode the device is a port on the GameCube
+// adapter that every Slippi gamepad here shares (see GcAdapter).
 //
-// Threads: the network thread calls OnData and Tick; HIDMaestro raises output reports on its own
-// thread (they are only queued); the report clock submits to the device; creating and removing the
-// device run in the background, because each takes seconds.
+// Threads: the gamepad's reader thread calls OnFrame and the session thread Tick (both under the
+// hub's lock); HIDMaestro raises output reports on its own thread (they go straight out); the
+// report clock submits to the device; creating and removing the device run in the background,
+// because each takes seconds.
 
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.Net;
 using HIDMaestro;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 enum SessionState { Opening, Starting, Open, Closed }
 
 // Why a session ended: only a gamepad that went away is opened again when it comes back
-enum CloseReason { None, Closed, Taken, WentAway }
+enum CloseReason { None, Closed, WentAway }
 
 sealed class PadSession
 {
-    const long KeepAliveMs = 500;
-    const long GamepadLostMs = 3000;
-    const long OutResendMs = 8;
-
     // XInput mode's device: a wired Xbox 360 controller as the USB device it is, on the USB/IP
     // transport, so Windows' own xusb22 drives it and every API sees one controller. HIDMaestro's
     // Xbox profiles pair a HID device with an XInput companion, and Steam listed those as two pads
@@ -43,20 +40,16 @@ sealed class PadSession
 
     readonly HMContext _ctx;
     readonly GcAdapter _adapter;
-    readonly Action<byte[], EndPoint> _send;
-    readonly uint _session;
-    readonly string _pcName;
-    readonly Stopwatch _clock = Stopwatch.StartNew();
+    readonly RfcommSocket _link;
 
-    public Beacon Pad { get; private set; }
-    public EndPoint Address { get; private set; }
+    public string Id { get; }                     // The gamepad's Bluetooth address
+    public PadIdentity? Pad { get; private set; } // Its identity, once it has said who it is
     public SessionState State { get; private set; } = SessionState.Opening;
     public string Status { get; private set; } = "Opening…"; // A few words: it fits beside the button
     public string? Problem { get; private set; }               // Why it couldn't open, for the details line
     public CloseReason Reason { get; private set; } = CloseReason.None;
 
     int _rateHz;
-    long _lastOpenSent = -KeepAliveMs, _lastPacket, _lastOutSent;
 
     // The device and what the report clock submits (under _submitLock)
     readonly object _submitLock = new();
@@ -74,29 +67,23 @@ sealed class PadSession
     readonly List<Task> _deviceWork = new();
 
     // SInput handshake: the gamepad's features, asked for once it streams, kept, and given to the
-    // host whenever it asks, so SDL never waits on the network
+    // host whenever it asks, so SDL never waits on the radio
     byte[]? _features;
     bool _featuresAsked;
-    ushort _lastReliable;
-
-    // Output reports and config commands to the gamepad, one at a time, resent until acked.
-    // Config commands go first and are never dropped; output reports keep only the newest.
-    readonly ConcurrentQueue<byte[]> _outputs = new();
-    readonly ConcurrentQueue<byte[]> _config = new();
-    byte[]? _outPending;
-    uint _outPendingMagic;
 
     // The config app through ConfigServer: replies and the live view, as WebUSB packets
     public event Action<byte[]>? ConfigFromGamepad;
-    ushort _lastReply;
-    ushort _outToken, _outInFlight;
+
+    // The gamepad's clock (32-bit microseconds), unwrapped
+    long _sampledBase;
+    uint _lastSampled;
+    bool _haveSampled;
 
     // Rates shown in the list
     int _packets, _submitted;
     long _rateWindowStart;
     public int PacketsPerSecond { get; private set; }
     public int ReportsPerSecond { get; private set; }
-    public double RttMs { get; private set; }
     public int? AdapterPort => _gcPort?.Number;
     public double BufferMs => Timing.DelayUs / 1000.0;
     public double LatePercent => Timing.LateShare * 100;
@@ -107,155 +94,160 @@ sealed class PadSession
         _ => (_reports.DelayUs, _reports.LateShare),
     };
 
-    public PadSession(HMContext ctx, GcAdapter adapter, Beacon pad, EndPoint address, uint session, string pcName,
-                      int rateHz, Action<byte[], EndPoint> send)
+    public PadSession(HMContext ctx, GcAdapter adapter, string id, RfcommSocket link, int rateHz)
     {
         _ctx = ctx;
         _adapter = adapter;
-        Pad = pad;
-        Address = address;
-        _session = session;
-        _pcName = pcName;
+        Id = id;
+        _link = link;
         _rateHz = rateHz;
-        _send = send;
-        _lastPacket = _clock.ElapsedMilliseconds;
+        SendHost(); // The gamepad waits for it before it says who it is
     }
 
-    // Input echoes for the round trip: ten a second is plenty to show it
-    const long EchoEveryMs = 100;
-    long _lastEcho = -EchoEveryMs;
-
-    public bool EchoDue()
-    {
-        long now = _clock.ElapsedMilliseconds;
-        if (now - _lastEcho < EchoEveryMs)
-            return false;
-        _lastEcho = now;
-        return true;
-    }
-
-    // One sample per report: the gamepad sends at the report rate and each sample is played once
-    static uint WlanPeriodUs(int rateHz) => (uint)(1_000_000 / rateHz);
-
-    // The mode this PC wants the gamepad in, for this run (0 for none): asked for while it differs,
-    // so it also holds after the gamepad restarts
+    // The mode this PC wants the gamepad in, for this run (0 for none): it follows unless its mode
+    // was chosen on the gamepad itself
     byte _wantedFormat;
-    long _lastModeSent = -KeepAliveMs;
 
-    public byte Format { get; private set; } = 0xFF; // The mode its packets are in
+    public byte Format => Pad?.Format ?? 0xFF; // The mode its reports are in
     public byte? WantedFormat => _wantedFormat == 0 ? null : _wantedFormat;
 
     public void SetMode(byte format)
     {
         _wantedFormat = format;
-        _lastModeSent = -KeepAliveMs; // Ask now
+        SendHost();
     }
 
     public void SetRate(int rateHz)
     {
         _rateHz = rateHz;
-        _lastOpenSent = -KeepAliveMs; // Tell the gamepad now
+        SendHost();
     }
 
-    public void OnBeacon(Beacon pad, EndPoint address)
+    void SendHost() => Send(Protocol.Host(_wantedFormat, Updates.CurrentNumber, _rateHz));
+
+    void Send(byte[] frame)
     {
-        Pad = pad;
-        Address = address;
-
-        // Another PC took it: its new owner's session is in the beacon
-        if (State != SessionState.Opening && pad.OwnerSession != 0 && pad.OwnerSession != _session)
-            Close($"Taken by {pad.OwnerName}", CloseReason.Taken, sendClose: false);
+        if (State != SessionState.Closed && !_link.Send(frame))
+            Close("Gamepad went away", CloseReason.WentAway);
     }
 
-    public void OnData(in DataPacket packet)
+    public void OnFrame(byte lane, ReadOnlySpan<byte> payload, long arrivalUs)
     {
         if (State == SessionState.Closed)
             return;
+        switch (lane)
+        {
+        case Protocol.LaneInput:
+            if (payload.Length >= 7)
+                OnInput(BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(2)), payload.Slice(6), arrivalUs);
+            break;
+        case Protocol.LaneBulk:
+            ConfigFromGamepad?.Invoke(payload.ToArray()); // The config app's live view
+            break;
+        case Protocol.LaneMessage:
+            if (payload.Length >= 1)
+                OnMessage(payload[0], payload.Slice(1));
+            break;
+        }
+    }
 
-        _lastPacket = _clock.ElapsedMilliseconds;
+    void OnMessage(byte type, ReadOnlySpan<byte> p)
+    {
+        switch (type)
+        {
+        case Protocol.MsgWake:
+            if (PadIdentity.Parse(Id, p) is not PadIdentity pad)
+            {
+                Fail("Can't open", "The gamepad's firmware speaks another link version");
+                return;
+            }
+            // A new mode: its device goes, and the one for the new mode comes up
+            if (_deviceFormat != 0xFF && pad.Format != _deviceFormat)
+                RemoveDevice();
+            Pad = pad;
+            if (State == SessionState.Opening)
+            {
+                State = SessionState.Starting;
+                Status = "Starting…";
+            }
+            Send(Protocol.Status(1)); // Adopted, as player 1
+            if (pad.Format is not (Protocol.FormatSInput or Protocol.FormatXInput or Protocol.FormatSlippi))
+                Fail("Can't open", $"{Protocol.FormatName(pad.Format)} mode isn't supported on a PC");
+            break;
+        case Protocol.MsgReport:
+            OnCommandReply(p.Slice(0, Math.Min(p.Length, 64)));
+            break;
+        case Protocol.MsgConfig:
+            ConfigFromGamepad?.Invoke(p.ToArray());
+            break;
+        }
+    }
+
+    // A live input report: [full length][report, trailing zeros cut], sampled at the gamepad's time
+    void OnInput(uint sampled, ReadOnlySpan<byte> trimmed, long arrivalUs)
+    {
+        int full = trimmed[0];
+        if (Pad == null || full > 64 || trimmed.Length - 1 > full)
+            return;
+        var report = new byte[full];
+        trimmed.Slice(1).CopyTo(report);
+
+        if (_haveSampled && sampled < _lastSampled && _lastSampled - sampled > 0x80000000u)
+            _sampledBase += 1L << 32;
+        _lastSampled = sampled;
+        _haveSampled = true;
+        long sampledUs = _sampledBase + sampled;
         _packets++;
-        RttMs = packet.RttUs / 1000.0;
-        if (State == SessionState.Opening)
+
+        switch (Format)
         {
-            State = SessionState.Starting;
-            Status = "Starting…";
-        }
-
-        if (_outPending != null && packet.OutAck == _outInFlight)
-            _outPending = null;
-        Format = packet.Format;
-
-        // The gamepad changed mode: its device goes, and the one for the new mode comes up
-        if (_deviceFormat != 0xFF && packet.Format != _deviceFormat)
-            RemoveDevice();
-
-        if (packet.Format == Protocol.FormatXInput)
-            OnXInput(packet);
-        else if (packet.Format == Protocol.FormatSInput)
-            OnSInput(packet);
-        else if (packet.Format == Protocol.FormatSlippi)
-            OnSlippi(packet);
-        else
-            Fail("Can't open", $"{Protocol.FormatName(packet.Format)} mode isn't supported over WLAN yet");
-    }
-
-    void OnXInput(in DataPacket packet)
-    {
-        if (_deviceFormat == 0xFF)
-            StartDevice(_ctx.GetProfile(XInputProfile)!, Protocol.FormatXInput, firstReport: null);
-
-        if (_deviceProfile != null && packet.Report.Length >= XInputReportSize)
-            _reports.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report.Slice(0, XInputReportSize).ToArray());
-    }
-
-    void OnSInput(in DataPacket packet)
-    {
-        if (_features == null)
-        {
-            if (!_featuresAsked)
+        case Protocol.FormatXInput:
+            if (_deviceFormat == 0xFF)
+                StartDevice(_ctx.GetProfile(XInputProfile)!, Protocol.FormatXInput, firstReport: null);
+            if (_deviceProfile != null && report.Length >= XInputReportSize)
+                _reports.Add(arrivalUs, sampledUs, report[..XInputReportSize]);
+            break;
+        case Protocol.FormatSInput:
+            OnSInput(report, arrivalUs, sampledUs);
+            break;
+        case Protocol.FormatSlippi:
+            if (_deviceFormat == 0xFF)
             {
-                _outputs.Clear();
-                _outPending = null;
-                _outputs.Enqueue(Personas.FeatureRequest());
-                _featuresAsked = true;
-                Status = "Asking for its features…";
+                _deviceFormat = Protocol.FormatSlippi;
+                _gcPort = _adapter.Join(Id, SendOutput);
+                if (_gcPort == null)
+                    Fail("No port free", "All four GameCube adapter ports are in use");
+                else
+                    Status = "Creating the adapter…";
             }
-            if (packet.ReliableToken != 0 && Personas.IsFeatureReply(packet.Report))
-            {
-                _features = packet.Report.ToArray();
-                _lastReliable = packet.ReliableToken;
-            }
-        }
-
-        // Its USB identity comes from the beacon, so wait for one in this mode: right after a mode
-        // change the last beacon still has the previous mode's (the Xbox 360's, or the adapter's)
-        if (_deviceFormat == 0xFF && _features != null && Pad.Format == Protocol.FormatSInput)
-            StartDevice(Personas.SInput(Pad), Protocol.FormatSInput, firstReport: _features);
-
-        // A resent command reply goes to the host once; input is played at its own time
-        if (packet.ReliableToken != 0 && packet.ReliableToken != _lastReliable)
-        {
-            _lastReliable = packet.ReliableToken;
-            _oneShots.Enqueue(packet.Report.ToArray());
-        }
-        else if (packet.ReliableToken == 0 && packet.Report.Length > 0)
-        {
-            _reports.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report.ToArray());
+            _gcPort?.Add(arrivalUs, sampledUs, report);
+            break;
         }
     }
 
-    void OnSlippi(in DataPacket packet)
+    void OnSInput(byte[] report, long arrivalUs, long sampledUs)
     {
-        if (_deviceFormat == 0xFF)
+        if (_features == null && !_featuresAsked)
         {
-            _deviceFormat = Protocol.FormatSlippi;
-            _gcPort = _adapter.Join(Pad.Id, QueueOutput);
-            if (_gcPort == null)
-                Fail("No port free", "All four GameCube adapter ports are in use");
-            else
-                Status = "Creating the adapter…";
+            SendOutput(Personas.FeatureRequest());
+            _featuresAsked = true;
+            Status = "Asking for its features…";
         }
-        _gcPort?.Add(PeriodicClock.NowUs, packet.SentUs, packet.Report);
+        if (_deviceFormat == 0xFF && _features != null)
+            StartDevice(Personas.SInput(Pad!), Protocol.FormatSInput, firstReport: _features);
+        if (report.Length > 0)
+            _reports.Add(arrivalUs, sampledUs, report);
+    }
+
+    // An input report that had to arrive: a command reply, given to the host once
+    void OnCommandReply(ReadOnlySpan<byte> report)
+    {
+        if (Format == Protocol.FormatSInput && _features == null && Personas.IsFeatureReply(report))
+        {
+            _features = report.ToArray(); // StartDevice hands it to the host first
+            return;
+        }
+        _oneShots.Enqueue(report.ToArray());
     }
 
     // A port on the adapter is open once the adapter is there
@@ -280,53 +272,12 @@ sealed class PadSession
         Problem = problem;
     }
 
-    // Called from the network thread every pass: keep it open, send outputs, notice silence
+    // Called from the session thread every few ms: status and rates
     public void Tick()
     {
         if (State == SessionState.Closed)
             return;
-        long now = _clock.ElapsedMilliseconds;
-
-        if (now - _lastOpenSent >= KeepAliveMs)
-        {
-            _send(Protocol.Open(WlanPeriodUs(_rateHz), _session, _pcName), Address);
-            _lastOpenSent = now;
-        }
-
-        if (_wantedFormat != 0 && Format != 0xFF && Format != _wantedFormat && now - _lastModeSent >= KeepAliveMs)
-        {
-            _send(Protocol.Mode(_session, _wantedFormat), Address);
-            _lastModeSent = now;
-        }
-
-        if (now - _lastPacket >= GamepadLostMs)
-        {
-            Close("Gamepad went quiet", CloseReason.WentAway, sendClose: false);
-            return;
-        }
-
-        if (_outPending == null && _config.TryDequeue(out var command))
-        {
-            _outPending = command;
-            _outPendingMagic = Protocol.MagicConfig;
-            _outToken = (ushort)(_outToken == ushort.MaxValue ? 1 : _outToken + 1);
-            _outInFlight = _outToken;
-            _lastOutSent = -OutResendMs;
-        }
-        else if (_outPending == null && _outputs.TryDequeue(out var next))
-        {
-            _outPending = next;
-            _outPendingMagic = Protocol.MagicOut;
-            _outToken = (ushort)(_outToken == ushort.MaxValue ? 1 : _outToken + 1);
-            _outInFlight = _outToken;
-            _lastOutSent = -OutResendMs;
-        }
-        if (_outPending != null && now - _lastOutSent >= OutResendMs)
-        {
-            _send(Protocol.Message(_outPendingMagic, _outInFlight, _outPending), Address);
-            _lastOutSent = now;
-        }
-
+        long now = Environment.TickCount64;
         UpdateSlippiStatus();
         if (now - _rateWindowStart >= 1000)
         {
@@ -339,32 +290,17 @@ sealed class PadSession
 
     // ---- The config app ----
 
-    public void SendConfig(byte[] packet)
-    {
-        if (State != SessionState.Closed)
-            _config.Enqueue(packet);
-    }
+    // The link is reliable and in order: config commands go straight out
+    public void SendConfig(byte[] packet) => Send(Protocol.Message(Protocol.MsgConfig, packet));
 
-    // A config reply: the gamepad resends it until echoed, so pass each token on once
-    public void OnConfigReply(ushort token, byte[] packet)
-    {
-        if (token == 0 || token == _lastReply)
-            return;
-        _lastReply = token;
-        ConfigFromGamepad?.Invoke(packet);
-    }
-
-    public void OnLive(byte[] packet) => ConfigFromGamepad?.Invoke(packet);
-
-    public void Close(string why, CloseReason reason, bool sendClose = true)
+    public void Close(string why, CloseReason reason)
     {
         if (State == SessionState.Closed)
             return;
-        if (sendClose)
-            _send(Protocol.Close(_session), Address);
         State = SessionState.Closed;
         Status = why;
         Reason = reason;
+        _link.Dispose(); // The gamepad sees the link go
         RemoveDevice();
     }
 
@@ -379,7 +315,7 @@ sealed class PadSession
 
         // Each device gets its own ID: Steam can hold a removed device open, and reusing its ID
         // leaves the new one dead
-        string identity = $"hhl-wlan-{Pad.Id}-{Environment.TickCount64:X}";
+        string identity = $"hhl-link-{Id}-{Environment.TickCount64:X}";
         Track(Task.Run(() =>
         {
             HMController created;
@@ -439,9 +375,6 @@ sealed class PadSession
         Problem = null;
         _features = null;
         _featuresAsked = false;
-        _outputs.Clear();
-        _config.Clear();
-        _outPending = null;
 
         if (gone != null)
         {
@@ -486,14 +419,11 @@ sealed class PadSession
             _oneShots.Enqueue(_features); // Answered from the handshake
             return;
         }
-        QueueOutput(report);
+        SendOutput(report);
     }
 
-    void QueueOutput(byte[] report)
-    {
-        _outputs.Enqueue(report);
-        while (_outputs.Count > 16 && _outputs.TryDequeue(out byte[]? dropped)) { } // A stalled link keeps the newest
-    }
+    // Output reports (rumble, LEDs, SInput commands) go straight to the gamepad
+    void SendOutput(byte[] report) => Send(Protocol.Message(Protocol.MsgOutput, report));
 
     // Command replies go to the host at once; samples when their time comes. The driver delivers
     // every other frame on this path, so each one is submitted twice.
@@ -544,7 +474,7 @@ sealed class PadSession
                     }
                 }
             }
-        }) { IsBackground = true, Priority = ThreadPriority.Highest, Name = $"Playout {Pad.Name}" };
+        }) { IsBackground = true, Priority = ThreadPriority.Highest, Name = $"Playout {Id}" };
         _pump.Start();
     }
 }

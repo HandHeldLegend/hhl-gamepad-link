@@ -1,14 +1,18 @@
-// The settings kept between runs, in %LOCALAPPDATA%\HHL Gamepad WLAN\settings.ini (key=value lines).
+// The settings kept between runs, in %LOCALAPPDATA%\HHL Gamepad Link\settings.ini (key=value lines).
 // Only what should outlast a run lives here: Close to tray. The report rate and the modes picked
 // for gamepads stay for one run.
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static class Settings
 {
     static readonly string Folder =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad WLAN");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad Link");
     static readonly string FilePath = Path.Combine(Folder, "settings.ini");
+
+    // Where the app kept them up to 0.1, as HHL Gamepad WLAN: read when there are none here yet
+    static readonly string OldFilePath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad WLAN", "settings.ini");
 
     public static bool CloseToTray { get; private set; }
 
@@ -16,7 +20,7 @@ static class Settings
     {
         try
         {
-            foreach (var line in File.ReadAllLines(FilePath))
+            foreach (var line in File.ReadAllLines(File.Exists(FilePath) || !File.Exists(OldFilePath) ? FilePath : OldFilePath))
             {
                 var parts = line.Split('=', 2, StringSplitOptions.TrimEntries);
                 if (parts.Length == 2 && parts[0] == "closeToTray")

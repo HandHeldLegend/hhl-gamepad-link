@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-HHL Gamepad WLAN - app icon generator.
+HHL Gamepad Link - app icon generator.
 
 Draws src/app.ico (16 to 256 px) and assets/icon-512.png. The artwork is the HHL Gamepad Config
-icon (dark tile, lavender ring, console-gray pad, SFC buttons) with a WLAN badge: three arcs in
-the app's cyan accent, bottom right.
+icon (dark tile, lavender ring, console-gray pad, SFC buttons) with a link badge: two chain links
+on the app's cyan accent, bottom right.
 
     python tools/make_icon.py
 
@@ -33,14 +33,12 @@ WELL_SIDE, WELL_RX = 489, 130
 BTN_OFF, BTN_R, BTN_SHADOW = 165, 98, 14
 BUTTONS = [(0, -1, BLUE), (1, 0, RED), (0, 1, YELLOW), (-1, 0, GREEN)]
 
-# WLAN badge: a cyan disc cut out of the art by a dark gap, three white arcs and a dot inside
+# Link badge: a cyan disc cut out of the art by a dark gap, two white chain links inside, at 45 degrees
 BADGE_X, BADGE_Y, BADGE_R, BADGE_GAP = 790, 790, 200, 34
-ARC_RADII, ARC_W, DOT_R = (70, 120, 170), 34, 30
-ARC_SPAN = (225, 315)   # degrees, PIL's clockwise-from-east: the top quarter
-ARC_BASE_Y = 70         # arcs centre below the badge centre so the fan sits in the middle
+LINK_LEN, LINK_H, LINK_W, LINK_OFF = 190, 100, 30, 62  # one link's length, height, stroke, offset
 
 # Small sizes: a bigger pad and buttons and a bigger badge, so they still read at 16 px
-SMALL = dict(pad_r=430, btn_off=205, btn_r=120, badge_r=260, arcs=(110, 200), arc_w=60, dot_r=50)
+SMALL = dict(pad_r=430, btn_off=205, btn_r=120, badge_r=260, link_w=48)
 
 
 def _rgb(h):
@@ -73,7 +71,7 @@ def draw(px, small):
         disc(c, c, SMALL["pad_r"], GRAY_L)
         for dx, dy, col in BUTTONS:
             disc(c + dx * SMALL["btn_off"], c + dy * SMALL["btn_off"], SMALL["btn_r"], col)
-        badge_r, arcs, arc_w, dot_r = SMALL["badge_r"], SMALL["arcs"], SMALL["arc_w"], SMALL["dot_r"]
+        badge_r, link_w = SMALL["badge_r"], SMALL["link_w"]
     else:
         ro = RING_R + RING_W / 2
         d.ellipse([(c - ro) * k, (c - ro) * k, (c + ro) * k, (c + ro) * k],
@@ -90,17 +88,23 @@ def draw(px, small):
             bx, by = c + dx * BTN_OFF, c + dy * BTN_OFF
             disc(bx, by + BTN_SHADOW, BTN_R, GRAY_D)
             disc(bx, by, BTN_R, col)
-        badge_r, arcs, arc_w, dot_r = BADGE_R, ARC_RADII, ARC_W, DOT_R
+        badge_r, link_w = BADGE_R, LINK_W
 
-    # WLAN badge, separated from the art by a ring of the tile's colour
+    # Link badge, separated from the art by a ring of the tile's colour
     bx, by = BADGE_X + (badge_r - BADGE_R) * 0.35, BADGE_Y + (badge_r - BADGE_R) * 0.35
     disc(bx, by, badge_r + BADGE_GAP, BG_DARK)
     disc(bx, by, badge_r, CYAN)
-    base_y = by + ARC_BASE_Y * badge_r / BADGE_R
-    for r in arcs:
-        d.arc([(bx - r) * k, (base_y - r) * k, (bx + r) * k, (base_y + r) * k],
-              ARC_SPAN[0], ARC_SPAN[1], fill=_rgb(WHITE), width=round(arc_w * k))
-    disc(bx, base_y, dot_r, WHITE)
+    # Two overlapping rounded links, drawn level on their own layer and turned 45 degrees
+    s = badge_r / BADGE_R
+    links = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(links)
+    hl, hh = LINK_LEN * s / 2, LINK_H * s / 2
+    for dx in (-LINK_OFF * s, LINK_OFF * s):
+        cx = bx + dx
+        ld.rounded_rectangle([(cx - hl) * k, (by - hh) * k, (cx + hl) * k, (by + hh) * k],
+                             radius=hh * k, outline=_rgb(WHITE), width=round(link_w * k))
+    links = links.rotate(45, resample=Image.BICUBIC, center=(bx * k, by * k))
+    img.alpha_composite(links)
 
     return img.resize((px, px), Image.LANCZOS)
 

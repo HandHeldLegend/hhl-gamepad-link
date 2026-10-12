@@ -14,7 +14,7 @@
 
 using HIDMaestro;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 sealed class GcAdapter : IDisposable
 {
@@ -27,7 +27,7 @@ sealed class GcAdapter : IDisposable
     const long QuietNeutralUs = 100_000;   // No input this long: buttons up, sticks centred
     const long QuietUnplugUs = 1_000_000;  // No input this long: no controller on the port
     const string ProfileId = "hhl-gamecube-adapter";
-    const string Identity = "hhl-wlan-gamecube-adapter";
+    const string Identity = "hhl-link-gamecube-adapter";
 
     public sealed class Port
     {
@@ -119,7 +119,7 @@ sealed class GcAdapter : IDisposable
         }
     }
 
-    // Called from the network thread: the adapter goes once it has been empty a while
+    // Called from the session thread: the adapter goes once it has been empty a while
     public void Tick()
     {
         lock (_lock)

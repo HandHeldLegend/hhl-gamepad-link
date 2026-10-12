@@ -2,7 +2,7 @@
 
 using System.Runtime.InteropServices;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static partial class NativeUi
 {

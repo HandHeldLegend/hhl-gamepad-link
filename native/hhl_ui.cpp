@@ -1,4 +1,4 @@
-// HHL Gamepad WLAN's window: a Win32 window drawn with Dear ImGui on Direct3D 11.
+// HHL Gamepad Link's window: a Win32 window drawn with Dear ImGui on Direct3D 11.
 //
 // The app (C#) owns the logic and calls the few functions below once per frame; everything about
 // how the window looks lives here. Strings are UTF-8.
@@ -97,7 +97,7 @@ static void hide_to_tray()
     g_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_tray.uCallbackMessage = kTrayMessage;
     g_tray.hIcon = app_icon(GetSystemMetrics(SM_CXSMICON));
-    lstrcpynW(g_tray.szTip, L"HHL Gamepad WLAN", ARRAYSIZE(g_tray.szTip));
+    lstrcpynW(g_tray.szTip, L"HHL Gamepad Link", ARRAYSIZE(g_tray.szTip));
     Shell_NotifyIconW(NIM_ADD, &g_tray);
     ShowWindow(g_hwnd, SW_HIDE);
     g_hidden = true;
@@ -106,7 +106,7 @@ static void hide_to_tray()
 static void tray_menu()
 {
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, kMenuShow, L"Show HHL Gamepad WLAN");
+    AppendMenuW(menu, MF_STRING, kMenuShow, L"Show HHL Gamepad Link");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     // The app's items, with their submenus
@@ -273,7 +273,7 @@ extern "C" int ui_init(const wchar_t *title, int width, int height, int start_hi
     g_scale = GetDpiForSystem() / 96.0f;
 
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, wnd_proc, 0, 0, GetModuleHandleW(nullptr), nullptr,
-                       LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"HhlGamepadWlan", nullptr };
+                       LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"HhlGamepadLink", nullptr };
     wc.hIcon = app_icon(GetSystemMetrics(SM_CXICON));
     wc.hIconSm = app_icon(GetSystemMetrics(SM_CXSMICON));
     RegisterClassExW(&wc);

@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 sealed partial class PeriodicClock : IDisposable
 {

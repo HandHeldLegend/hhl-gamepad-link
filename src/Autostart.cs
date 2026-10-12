@@ -1,4 +1,4 @@
-// "Start with Windows". HHL Gamepad WLAN runs as administrator, and Windows skips elevated apps in
+// "Start with Windows". HHL Gamepad Link runs as administrator, and Windows skips elevated apps in
 // the usual startup list, so it is a Task Scheduler task instead: at this user's sign-in, with
 // highest privileges, started hidden in the tray. The task is the only thing the app leaves behind,
 // and only while the option is on. It points at this .exe where it is now.
@@ -8,11 +8,21 @@ using System.Security;
 using System.Security.Principal;
 using System.Text;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static class Autostart
 {
-    const string TaskName = "HHL Gamepad WLAN";
+    const string TaskName = "HHL Gamepad Link";
+    const string OldTaskName = "HHL Gamepad WLAN"; // The app's name up to 0.1
+
+    // A Start with Windows task from before the rename becomes this one
+    public static void AdoptOldTask()
+    {
+        if (Schtasks($"/Query /TN \"{OldTaskName}\"") != 0)
+            return;
+        Schtasks($"/Delete /TN \"{OldTaskName}\" /F");
+        Set(true);
+    }
 
     public static bool IsOn() => Schtasks($"/Query /TN \"{TaskName}\"") == 0;
 
@@ -29,7 +39,7 @@ static class Autostart
             <?xml version="1.0" encoding="UTF-16"?>
             <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
               <RegistrationInfo>
-                <Description>HHL Gamepad WLAN: HOJA gamepads on the home network</Description>
+                <Description>HHL Gamepad Link: HOJA gamepads over Bluetooth</Description>
               </RegistrationInfo>
               <Triggers><LogonTrigger><UserId>{SecurityElement.Escape(user)}</UserId></LogonTrigger></Triggers>
               <Principals>
@@ -52,7 +62,7 @@ static class Autostart
             </Task>
             """;
 
-        string file = Path.Combine(Path.GetTempPath(), $"hhl-gamepad-wlan-task-{Environment.ProcessId}.xml");
+        string file = Path.Combine(Path.GetTempPath(), $"hhl-gamepad-link-task-{Environment.ProcessId}.xml");
         try
         {
             File.WriteAllText(file, xml, Encoding.Unicode);

@@ -1,4 +1,4 @@
-// The two drivers HHL Gamepad WLAN uses, for the Drivers window: what each is for, whether it is
+// The two drivers HHL Gamepad Link uses, for the Drivers window: what each is for, whether it is
 // installed, and installing or removing it in the background.
 //
 //   The virtual controller driver (HIDMaestro): gamepads in SInput and XInput mode. The app installs
@@ -12,7 +12,7 @@ using System.Diagnostics;
 using HIDMaestro;
 using Microsoft.Win32;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 sealed class Drivers
 {
@@ -28,7 +28,7 @@ sealed class Drivers
     public static string? Working { get; private set; }
 
     readonly HMContext _ctx;
-    readonly Func<LanHub?> _hub;
+    readonly Func<BluetoothHub?> _hub;
     readonly bool[] _installed = new bool[2];
     Which? _busy;
     Task? _work;
@@ -36,7 +36,7 @@ sealed class Drivers
     public string Note { get; private set; } = "";
     public event Action? ControllerDriverInstalled;
 
-    public Drivers(HMContext ctx, Func<LanHub?> hub)
+    public Drivers(HMContext ctx, Func<BluetoothHub?> hub)
     {
         _ctx = ctx;
         _hub = hub;
@@ -45,7 +45,7 @@ sealed class Drivers
     public IReadOnlyList<NativeUi.DriverRow> Rows => new[]
     {
         new NativeUi.DriverRow("Virtual controller driver",
-            "HIDMaestro. Makes gamepads in SInput mode controllers on this PC. HHL Gamepad WLAN " +
+            "HIDMaestro. Makes gamepads in SInput mode controllers on this PC. HHL Gamepad Link " +
             "installs it each time it starts.",
             State(Which.Controller), _installed[0], _busy == Which.Controller,
             "Every gamepad open here closes, and the driver and its certificate leave this PC. Other apps " +

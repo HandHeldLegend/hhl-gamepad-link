@@ -2,7 +2,7 @@
 
 using HIDMaestro;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static class Personas
 {
@@ -17,9 +17,9 @@ static class Personas
     // The gamepad's own identity. SDL (Steam Input) tells the bus from the parent's compatible
     // IDs: a root device reads as an unknown bus and SDL's SInput driver passes it by. Presented
     // as Bluetooth, which SInput also runs over, it is picked up like a real wireless pad.
-    public static HMProfile SInput(Beacon pad) => new HMProfileBuilder()
-        .Id($"hhl-wlan-sinput-{pad.Id}")
-        .Name($"{pad.Name} (LAN)")
+    public static HMProfile SInput(PadIdentity pad) => new HMProfileBuilder()
+        .Id($"hhl-link-sinput-{pad.Id}")
+        .Name($"{pad.Name} (Bluetooth)")
         .Vendor("HHL")
         .ManufacturerString("HHL")
         .ProductString(pad.Name)

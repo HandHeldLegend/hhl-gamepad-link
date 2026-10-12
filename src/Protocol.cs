@@ -1,33 +1,42 @@
-// Wire format shared with the gamepad's LAN test build (src/hal/rp2040/wlan_lan_test.c).
+// What a gamepad and this app say to each other over Bluetooth: the HOJA dongle link
+// (HOJA-LIB-DONGLE include/dongle_link.h), with this app in the dongle's place. The gamepad pages
+// this PC and opens an RFCOMM channel to the app's service; RFCOMM is one reliable byte stream, so
+// each piece travels as a frame:
+//
+//   [lane u8][length u8][payload]
+//
+//   lane          direction      payload
+//   ------------  -------------  ------------------------------------------------------------
+//   1 input       gamepad -> PC  [seq u16][sampled_us u32][full length][report, trailing zeros cut]
+//   2 bulk        gamepad -> PC  the gamepad's live WebUSB report, for the config app
+//   3 message     both           [dongle_link_msg_t][payload]: HOST, WAKE, REPORT, OUTPUT, CONFIG
+//   4 status      PC -> gamepad  dongle_status_s: rumble and player number
+//
 // Everything is little endian and packed.
 
 using System.Buffers.Binary;
 using System.Text;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static class Protocol
 {
-    public const int GamepadPort = 51700; // The gamepad listens here
-    public const int PcPort = 51701;      // Beacons and the stream arrive here
+    // The app's RFCOMM service, published in SDP. Gamepads without an SDP lookup call
+    // FixedChannel; the app binds it when it is free.
+    public static readonly Guid ServiceUuid = new("bbebd868-289d-4930-81dd-45d882b64bbf");
+    public const int FixedChannel = 5;
+    public const string ServiceName = "HHL Gamepad Link";
 
-    public const uint MagicOpen = 0x4E45504F;   // "OPEN"
-    public const uint MagicClose = 0x534F4C43;  // "CLOS"
-    public const uint MagicBeacon = 0x424A4F48; // "HOJB"
-    public const uint MagicData = 0x3154414C;   // "LAT1"
-    public const uint MagicOut = 0x3154554F;    // "OUT1": an output report from the host
-    public const uint MagicConfig = 0x31474643; // "CFG1": a config app command
-    public const uint MagicReply = 0x31524643;  // "CFR1": a config reply, echoed back as receipt
-    public const uint MagicLive = 0x31494643;   // "CFI1": the config app's live input view
-    public const uint MagicMode = 0x31444F4D;   // "MOD1": the mode this PC wants the gamepad in
+    public const byte LaneInput = 1, LaneBulk = 2, LaneMessage = 3, LaneStatus = 4;
 
-    public const int BeaconSize = 68;         // Without the user name (earlier firmware)
-    public const int BeaconWithUserSize = 92; // With the name set in the config app
-    public const int DataSize = 126;
-    public const int OutSize = 72;
-    const int PcNameLength = 16;
+    // dongle_link_msg_t
+    public const byte MsgHost = 1, MsgWake = 2, MsgReport = 3, MsgOutput = 4, MsgConfig = 5;
 
-    // core_reportformat_t on the gamepad
+    public const byte DongleProtocol = 3;   // DONGLE_PROTOCOL_VERSION
+    public const byte BoardPcApp = 4;       // dongle_board_t: this app
+    public const byte HostPc = 1;           // DONGLE_HOST_PC
+
+    // core_reportformat_t on the gamepad: what PadSession works in
     public const byte FormatXInput = 1;
     public const byte FormatSlippi = 2;
     public const byte FormatSInput = 6;
@@ -45,46 +54,60 @@ static class Protocol
         _ => $"mode {format}",
     };
 
-    public static byte[] Open(uint periodUs, uint session, string pcName)
+    // dongle_mode_t, as the link carries modes
+    public static byte FormatFromMode(byte mode) => mode switch
     {
-        var p = new byte[12 + PcNameLength];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, MagicOpen);
-        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), periodUs);
-        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(8), session);
-        Encoding.ASCII.GetBytes(pcName, 0, Math.Min(pcName.Length, PcNameLength - 1), p, 12);
-        return p;
+        0 => 0,            // Switch
+        1 => FormatSInput,
+        2 => FormatXInput,
+        3 => FormatSlippi,
+        4 => 5,            // SNES
+        5 => 4,            // N64
+        6 => 3,            // GameCube
+        _ => 0xFF,
+    };
+
+    public static byte ModeFromFormat(byte format) => format switch
+    {
+        FormatSInput => 1,
+        FormatXInput => 2,
+        FormatSlippi => 3,
+        _ => 15,           // DONGLE_MODE_UNKNOWN: the gamepad keeps its own
+    };
+
+    public static byte[] Frame(byte lane, ReadOnlySpan<byte> payload)
+    {
+        var f = new byte[2 + payload.Length];
+        f[0] = lane;
+        f[1] = (byte)payload.Length;
+        payload.CopyTo(f.AsSpan(2));
+        return f;
     }
 
-    // MOD1: magic, session, the core_reportformat_t wanted, 3 reserved bytes. Gamepads without it
-    // ignore it.
-    public static byte[] Mode(uint session, byte format)
+    public static byte[] Message(byte type, ReadOnlySpan<byte> payload)
     {
-        var p = new byte[12];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, MagicMode);
-        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), session);
-        p[8] = format;
-        return p;
+        var m = new byte[1 + Math.Min(payload.Length, 64)];
+        m[0] = type;
+        payload.Slice(0, m.Length - 1).CopyTo(m.AsSpan(1));
+        return Frame(LaneMessage, m);
     }
 
-    public static byte[] Close(uint session)
+    // dongle_link_host_s: what this "dongle" is plugged into (a PC), the mode wanted for it, and
+    // the report pacing
+    public static byte[] Host(byte format, uint appVersion, int rateHz)
     {
-        var p = new byte[8];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, MagicClose);
-        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), session);
-        return p;
+        var p = new byte[10];
+        p[0] = DongleProtocol;
+        p[1] = BoardPcApp;
+        p[2] = HostPc;
+        p[3] = ModeFromFormat(format);
+        BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), appVersion);
+        BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(8), (ushort)(1_000_000 / rateHz));
+        return Message(MsgHost, p);
     }
 
-    // OUT1 and CFG1 share one layout: magic, token, length, then the 64-byte packet
-    public static byte[] Message(uint magic, ushort token, ReadOnlySpan<byte> report)
-    {
-        var p = new byte[OutSize];
-        int len = Math.Min(report.Length, 64);
-        BinaryPrimitives.WriteUInt32LittleEndian(p, magic);
-        BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(4), token);
-        BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(6), (ushort)len);
-        report.Slice(0, len).CopyTo(p.AsSpan(8));
-        return p;
-    }
+    // dongle_status_s: rumble is passed through output reports, so only the player number
+    public static byte[] Status(byte player) => Frame(LaneStatus, new byte[] { 1, player, 0, 0, 0, 0 });
 
     public static string Text(ReadOnlySpan<byte> field)
     {
@@ -93,57 +116,25 @@ static class Protocol
     }
 }
 
-// What a gamepad says about itself every second
-sealed record Beacon(string Id, string Name, string UserName, ushort Vid, ushort Pid, byte Format, int Rssi,
-                     uint OwnerSession, string OwnerName)
+// dongle_wake_s: the gamepad's identity, sent after the app's HOST and again after a mode change
+sealed record PadIdentity(string Id, string Name, string Manufacturer, ushort Vid, ushort Pid, byte Format,
+                          uint Firmware, bool ModeForced)
 {
-    // The name to show: the one set in the config app, else the model
-    public string Title => UserName.Length > 0 ? UserName : Name;
+    public string Title => Name;
 
-    public static Beacon? Parse(ReadOnlySpan<byte> p)
+    public static PadIdentity? Parse(string id, ReadOnlySpan<byte> p)
     {
-        if ((p.Length != Protocol.BeaconSize && p.Length != Protocol.BeaconWithUserSize) ||
-            BinaryPrimitives.ReadUInt32LittleEndian(p) != Protocol.MagicBeacon)
+        if (p.Length < 64 || p[6] != Protocol.DongleProtocol)
             return null;
-        return new Beacon(
-            Id: Convert.ToHexString(p.Slice(4, 6)),
-            Name: Protocol.Text(p.Slice(36, 32)),
-            UserName: p.Length >= Protocol.BeaconWithUserSize ? Protocol.Text(p.Slice(68, 24)) : "",
-            Vid: BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(10)),
-            Pid: BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(12)),
-            Format: p[14],
-            Rssi: (sbyte)p[15],
-            OwnerSession: BinaryPrimitives.ReadUInt32LittleEndian(p.Slice(16)),
-            OwnerName: Protocol.Text(p.Slice(20, 16)));
-    }
-}
-
-// One packet of the stream: the input report plus what the gamepad tracks about the link
-readonly ref struct DataPacket
-{
-    public readonly ReadOnlySpan<byte> Report;
-    public readonly long SentUs;          // The gamepad's clock when it sampled this
-    public readonly uint RttUs;
-    public readonly ushort ReliableToken; // Non-zero on a command reply, resent until echoed
-    public readonly ushort OutAck;        // The last output report the gamepad handled
-    public readonly byte Format;
-
-    DataPacket(ReadOnlySpan<byte> p)
-    {
-        // magic, seq, sent_us, rtt_us, rtt_seq, rssi (28 bytes), report_size, report[64],
-        // rel_token, out_ack, stall and link counters, and last the mode
-        Report = p.Slice(29, Math.Min((int)p[28], 64));
-        SentUs = (long)BinaryPrimitives.ReadUInt64LittleEndian(p.Slice(8));
-        RttUs = BinaryPrimitives.ReadUInt32LittleEndian(p.Slice(16));
-        ReliableToken = BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(93));
-        OutAck = BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(95));
-        Format = p[125];
-    }
-
-    public static bool TryParse(ReadOnlySpan<byte> p, out DataPacket packet)
-    {
-        bool ok = p.Length == Protocol.DataSize && BinaryPrimitives.ReadUInt32LittleEndian(p) == Protocol.MagicData;
-        packet = ok ? new DataPacket(p) : default;
-        return ok;
+        ushort session = BinaryPrimitives.ReadUInt16LittleEndian(p);
+        return new PadIdentity(
+            Id: id,
+            Name: Protocol.Text(p.Slice(12, 32)),
+            Manufacturer: Protocol.Text(p.Slice(44, 20)),
+            Vid: BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(2)),
+            Pid: BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(4)),
+            Format: Protocol.FormatFromMode((byte)(session & 0x0F)),
+            Firmware: BinaryPrimitives.ReadUInt32LittleEndian(p.Slice(8)),
+            ModeForced: (p[7] & 0x01) != 0);
     }
 }

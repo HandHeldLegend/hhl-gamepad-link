@@ -12,7 +12,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Threading.Channels;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 sealed class ConfigServer : IDisposable
 {
@@ -20,11 +20,11 @@ sealed class ConfigServer : IDisposable
 
     static readonly string[] AllowedOrigins = { "https://handheldlegend.github.io" };
 
-    readonly LanHub _hub;
+    readonly BluetoothHub _hub;
     readonly HttpListener _listener = new();
     readonly CancellationTokenSource _stop = new();
 
-    public ConfigServer(LanHub hub)
+    public ConfigServer(BluetoothHub hub)
     {
         _hub = hub;
         _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");

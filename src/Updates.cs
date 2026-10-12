@@ -1,4 +1,4 @@
-// Whether a newer HHL Gamepad WLAN is out: the latest GitHub release against this build's version.
+// Whether a newer HHL Gamepad Link is out: the latest GitHub release against this build's version.
 // Checked at start and every few hours; it only feeds a small badge, it never downloads anything.
 
 using System.Diagnostics;
@@ -6,11 +6,11 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 
-namespace HhlGamepadWlan;
+namespace HhlGamepadLink;
 
 static class Updates
 {
-    const string Repo = "HandHeldLegend/hhl-gamepad-wlan";
+    const string Repo = "HandHeldLegend/hhl-gamepad-link";
     public const string ReleasesPage = $"https://github.com/{Repo}/releases/latest";
     static readonly TimeSpan CheckEvery = TimeSpan.FromHours(6);
 
@@ -27,7 +27,7 @@ static class Updates
     public static void Start(CancellationToken stop) => _ = Task.Run(async () =>
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd($"HhlGamepadWlan/{Current}"); // GitHub requires one
+        http.DefaultRequestHeaders.UserAgent.ParseAdd($"HhlGamepadLink/{Current}"); // GitHub requires one
         http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
         while (!stop.IsCancellationRequested)
@@ -51,6 +51,16 @@ static class Updates
 
     public static void OpenReleasesPage() =>
         Process.Start(new ProcessStartInfo(ReleasesPage) { UseShellExecute = true });
+
+    // This build's version as one number for the gamepad (0.2.0 is 0x000200)
+    public static uint CurrentNumber
+    {
+        get
+        {
+            var p = Current.Split('.').Select(x => uint.TryParse(x, out uint n) ? n : 0).Concat(new uint[3]).Take(3).ToArray();
+            return (p[0] << 16) | (p[1] << 8) | p[2];
+        }
+    }
 
     // Versions are numbers separated by dots ("0.2.1"); a missing part counts as 0
     static bool IsNewer(string latest, string current)
