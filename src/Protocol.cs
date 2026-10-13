@@ -98,7 +98,7 @@ static class Protocol
 
     // dongle_link_host_s: what this "dongle" is plugged into (a PC), the mode wanted for it, and
     // the report pacing. [protocol][board][host][mode][app version u32][report period_us u16]
-    public static byte[] Host(byte format, uint appVersion, int rateHz)
+    public static byte[] Host(byte format, uint appVersion, int reportIntervalUs)
     {
         var p = new byte[10];
         p[0] = DongleProtocol;
@@ -106,7 +106,7 @@ static class Protocol
         p[2] = HostPc;
         p[3] = ModeFromFormat(format);
         BinaryPrimitives.WriteUInt32LittleEndian(p.AsSpan(4), appVersion);
-        BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(8), (ushort)(1_000_000 / rateHz));
+        BinaryPrimitives.WriteUInt16LittleEndian(p.AsSpan(8), (ushort)reportIntervalUs);
         return Message(MsgHost, p);
     }
 

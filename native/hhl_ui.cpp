@@ -339,6 +339,36 @@ extern "C" int ui_begin()
     return 1;
 }
 
+// A row under the header: whether the app is looking for gamepads nearby, and with `can_toggle`
+// a button to start or stop it. Returns 1 when the button was clicked.
+extern "C" int ui_scan_bar(int scanning, int can_toggle, const char *note)
+{
+    int clicked = 0;
+    if (can_toggle)
+    {
+        // Scanning shows as the lit state, like a selected choice in the header
+        ImGui::PushStyleColor(ImGuiCol_Button, scanning ? kAccent : IM_COL32(36, 40, 47, 255));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, scanning ? kAccent : IM_COL32(48, 53, 62, 255));
+        ImGui::PushStyleColor(ImGuiCol_Text, scanning ? IM_COL32(10, 24, 28, 255) : kText);
+        if (ImGui::Button(scanning ? "Stop scanning" : "Scan"))
+            clicked = 1;
+        ImGui::PopStyleColor(3);
+        ImGui::SameLine(0, 12 * g_scale);
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(note);
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 4 * g_scale));
+    return clicked;
+}
+
+// The window is in front and active: the user is looking at it
+extern "C" int ui_focused()
+{
+    return g_hwnd && GetForegroundWindow() == g_hwnd && !IsIconic(g_hwnd) ? 1 : 0;
+}
+
 extern "C" void ui_end()
 {
     ImGui::End();
@@ -384,10 +414,10 @@ extern "C" void ui_shutdown()
     if (g_hwnd) DestroyWindow(g_hwnd);
 }
 
-// Title on the left, the report rate as a labelled segmented control on the right. Returns the chosen
+// Title on the left, a labelled segmented control of choices on the right. Returns the chosen
 // index, which differs from `selected` on the frame it was clicked.
 extern "C" int ui_header(const char *title, const char *subtitle,
-                                               const char *const *rates, int count, int selected)
+                                               const char *const *choices, int count, int selected)
 {
     ImGui::PushFont(g_font_bold, g_font_bold->LegacySize);
     ImGui::AlignTextToFramePadding();
@@ -398,7 +428,7 @@ extern "C" int ui_header(const char *title, const char *subtitle,
     const ImGuiStyle &st = ImGui::GetStyle();
     float width = 0;
     for (int i = 0; i < count; i++)
-        width += ImGui::CalcTextSize(rates[i]).x + st.FramePadding.x * 2;
+        width += ImGui::CalcTextSize(choices[i]).x + st.FramePadding.x * 2;
     const float right = ImGui::GetWindowContentRegionMax().x;
     const float label_gap = 12 * g_scale;
 
@@ -418,7 +448,7 @@ extern "C" int ui_header(const char *title, const char *subtitle,
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, on ? kAccent : IM_COL32(48, 53, 62, 255));
         ImGui::PushStyleColor(ImGuiCol_Text, on ? IM_COL32(10, 24, 28, 255) : kText);
         ImGui::PushID(i);
-        if (ImGui::Button(rates[i]))
+        if (ImGui::Button(choices[i]))
             chosen = i;
         ImGui::PopID();
         ImGui::PopStyleColor(3);

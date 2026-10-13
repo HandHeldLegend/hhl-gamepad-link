@@ -1,5 +1,5 @@
 // The settings kept between runs, in %LOCALAPPDATA%\HHL Gamepad Link\settings.ini (key=value lines).
-// Only what should outlast a run lives here: Close to tray. The report rate and the modes picked
+// Only what should outlast a run lives here: Close to tray. The input profile and the modes picked
 // for gamepads stay for one run.
 
 namespace HhlGamepadLink;

@@ -25,18 +25,27 @@ static partial class NativeUi
     // A tray menu item: a submenu starts with its title item and ends with an item of its own
     public sealed record TrayItem(string Label, int Id, int Flags);
 
-    // The rate labels live for the whole run, as native UTF-8 strings
-    static nint[]? _rateLabels;
+    // The header's choice labels live for the whole run, as native UTF-8 strings
+    static nint[]? _choiceLabels;
 
     public static bool Open(string title, int width, int height, bool startHidden) =>
         Init(title, width, height, startHidden ? 1 : 0) != 0;
 
     public static Frame BeginFrame() => (Frame)Begin();
 
-    public static int RateHeader(string title, string subtitle, string[] rates, int selected)
+    // The window is in front and active: the user is looking at it
+    public static bool Focused() => UiFocused() != 0;
+
+    // A row under the header: whether the app looks for gamepads nearby, and with `canToggle` a
+    // Scan / Stop scanning button. True when the button was clicked.
+    public static bool ScanBar(bool scanning, bool canToggle, string note) =>
+        UiScanBar(scanning ? 1 : 0, canToggle ? 1 : 0, note) != 0;
+
+    // The title, and a labelled row of choices on the right: returns the chosen one
+    public static int ChoiceHeader(string title, string subtitle, string[] choices, int selected)
     {
-        _rateLabels ??= rates.Select(Marshal.StringToCoTaskMemUTF8).ToArray();
-        return Header(title, subtitle, _rateLabels, rates.Length, selected);
+        _choiceLabels ??= choices.Select(Marshal.StringToCoTaskMemUTF8).ToArray();
+        return Header(title, subtitle, _choiceLabels, choices.Length, selected);
     }
 
     // A gamepad's card, with a mode picker when modes are given. Returns whether its button was
@@ -85,6 +94,12 @@ static partial class NativeUi
 
     [LibraryImport(Lib, EntryPoint = "ui_end")]
     public static partial void End();
+
+    [LibraryImport(Lib, EntryPoint = "ui_focused")]
+    private static partial int UiFocused();
+
+    [LibraryImport(Lib, EntryPoint = "ui_scan_bar", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int UiScanBar(int scanning, int canToggle, string note);
 
     [LibraryImport(Lib, EntryPoint = "ui_shutdown")]
     public static partial void Shutdown();

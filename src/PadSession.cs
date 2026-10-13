@@ -40,7 +40,7 @@ sealed class PadSession
     readonly HMContext _ctx;
     readonly GcAdapter _adapter;
     LinkDevice? _link;      // The gamepad's Link collection; the hub opens it
-    int _rateHz;
+    int _reportIntervalUs;
     byte _wantedFormat;     // The mode this PC wants it in for this run, 0 for none
     long _lastReportMs = Environment.TickCount64;
 
@@ -72,12 +72,12 @@ sealed class PadSession
     int _packets, _submitted;
     long _rateWindowStartMs;
 
-    public PadSession(HMContext ctx, GcAdapter adapter, string id, int rateHz)
+    public PadSession(HMContext ctx, GcAdapter adapter, string id, int reportIntervalUs)
     {
         _ctx = ctx;
         _adapter = adapter;
         Id = id;
-        _rateHz = rateHz;
+        _reportIntervalUs = reportIntervalUs;
     }
 
     public string Id { get; }                     // The gamepad's Bluetooth address
@@ -122,14 +122,14 @@ sealed class PadSession
         SendHost();
     }
 
-    public void SetRate(int rateHz)
+    public void SetReportInterval(int intervalUs)
     {
-        _rateHz = rateHz;
+        _reportIntervalUs = intervalUs;
         SendHost();
     }
 
     void SendHost() =>
-        Send(Protocol.LaneMessage, Protocol.Host(_wantedFormat, Updates.CurrentNumber, _rateHz));
+        Send(Protocol.LaneMessage, Protocol.Host(_wantedFormat, Updates.CurrentNumber, _reportIntervalUs));
 
     // A disconnected gamepad's writes fail: its silence says it is away, not this. The hub stops the
     // host info to a gamepad disconnected here.

@@ -24,6 +24,7 @@ sealed class LinkHub : IDisposable
     readonly HMContext _ctx;
     readonly GcAdapter _adapter;
     readonly Caller _caller = new();
+    volatile bool _searching = true; // What the caller was last told (Caller.Search)
     readonly Thread _thread;
     volatile bool _running = true;
 
@@ -35,16 +36,23 @@ sealed class LinkHub : IDisposable
     readonly HashSet<string> _pairing = new();                  // Being paired now
     HashSet<string> _windowsPaired = new();                     // Known gamepads Windows holds a pairing for
 
-    public LinkHub(HMContext ctx, int rateHz)
+    public LinkHub(HMContext ctx, int reportIntervalUs)
     {
         _ctx = ctx;
         _adapter = new GcAdapter(ctx);
-        RateHz = rateHz;
+        ReportIntervalUs = reportIntervalUs;
+        _caller.IsOpenHere = IsOpenHere;
         _thread = new Thread(Run) { IsBackground = true, Name = "Link" };
         _thread.Start();
     }
 
-    public int RateHz { get; private set; }
+    public int ReportIntervalUs { get; private set; } // What the gamepads are asked for
+
+    // The search for gamepads over LE (Caller.Search) costs a gamepad open here report rate, so
+    // while one is, it only runs when asked for: the window sets this, every frame
+    public volatile bool ScanRequested;
+
+    public bool Searching => _searching;
 
     public IReadOnlyList<PadEntry> Snapshot()
     {
@@ -132,13 +140,13 @@ sealed class LinkHub : IDisposable
         }
     }
 
-    public void SetRate(int rateHz)
+    public void SetReportInterval(int intervalUs)
     {
         lock (_lock)
         {
-            RateHz = rateHz;
+            ReportIntervalUs = intervalUs;
             foreach (var session in _sessions.Values)
-                session.SetRate(rateHz);
+                session.SetReportInterval(intervalUs);
         }
     }
 
@@ -204,6 +212,13 @@ sealed class LinkHub : IDisposable
                 catch (Exception e) { Log.Write($"Link scan: {e}"); }
                 RefreshWindowsPaired();
                 nextScanMs = nowMs + ScanEveryMs;
+                _caller.Search(_searching); // Again, should the last change not have taken
+            }
+            bool search = ScanRequested || !AnyOpenHere;
+            if (search != _searching)
+            {
+                _searching = search;
+                _caller.Search(search);
             }
             lock (_lock)
             {
@@ -222,6 +237,21 @@ sealed class LinkHub : IDisposable
     }
 
     // A pairing removed in Windows' settings: the gamepad needs pairing again, not a call
+    bool IsOpenHere(string id)
+    {
+        lock (_lock)
+            return _sessions.TryGetValue(id, out var s) && s.State != SessionState.Closed;
+    }
+
+    public bool AnyOpenHere
+    {
+        get
+        {
+            lock (_lock)
+                return _sessions.Values.Any(s => s.State != SessionState.Closed);
+        }
+    }
+
     void RefreshWindowsPaired()
     {
         var paired = KnownPads.All().Where(k => Pairing.IsPaired(k.Id)).Select(k => k.Id).ToHashSet();
@@ -277,7 +307,7 @@ sealed class LinkHub : IDisposable
         _devices[device.Path] = device;
         if (!_sessions.TryGetValue(device.Id, out var session))
         {
-            session = new PadSession(_ctx, _adapter, device.Id, RateHz);
+            session = new PadSession(_ctx, _adapter, device.Id, ReportIntervalUs);
             if (_modes.TryGetValue(device.Id, out byte format))
                 session.SetMode(format);
             _sessions[device.Id] = session;

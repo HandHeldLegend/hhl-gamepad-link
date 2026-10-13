@@ -1,5 +1,5 @@
 // HHL Gamepad Link: HOJA gamepads connect to this PC over Bluetooth, as they would to a HOJA
-// dongle, and are opened here as their own controllers. The app picks their mode and report rate,
+// dongle, and are opened here as their own controllers. The app picks their mode and input profile,
 // so switching mode needs no new pairing or reconnect.
 
 using HIDMaestro;
@@ -8,17 +8,24 @@ using HhlGamepadLink;
 const string AppName = "HHL Gamepad Link";
 const int WindowWidth = 620, WindowHeight = 480;
 
-int[] rates = { 125, 250, 500 };
-string[] rateLabels = rates.Select(r => $"{r} Hz").ToArray();
-int rateIndex = 1; // 250 Hz each run: nothing is saved
+// Input profiles: the report interval each asks the gamepads for. A PC polls Bluetooth in 1.25 ms
+// slot pairs and an interval off them misses polls, so each is a whole number of slot pairs.
+// Measured over Link mode: 3.75 ms gives ~255 reports/s, 2.5 ms ~372/s, both with a median delay
+// under 0.5 ms (1.25 ms tops out at ~490/s with three times the delay). The cards show the rate.
+string[] profileLabels = { "Power", "Balanced", "Performance" };
+int[] profileIntervalsUs = { 7500, 3750, 2500 };
+int profileIndex = 1; // Balanced each run: nothing is saved
+
+// Scan pressed, while a gamepad is open here: until it is pressed again or the window loses focus
+bool scanRequested = false;
 
 // The modes a gamepad can be put in from here: the ones this app opens
 byte[] modeFormats = { Protocol.FormatSInput, Protocol.FormatXInput, Protocol.FormatSlippi };
 string[] modeLabels = { "SInput", "XInput", "Slippi" };
 string[] modeTrayLabels = { "SInput (Steam)", "XInput", "Slippi (GameCube adapter)" };
 
-// Tray menu item IDs: the report rates, then a block per gamepad for its modes
-const int TrayRateBase = 100, TrayModeBase = 1000, TrayModesPerPad = 10;
+// Tray menu item IDs: the input profiles, then a block per gamepad for its modes
+const int TrayProfileBase = 100, TrayModeBase = 1000, TrayModesPerPad = 10;
 
 // The tray menu as last given to the window, and the gamepads its mode items stand for
 string trayKey = "";
@@ -71,6 +78,10 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
     if (hub == null && driverReady.IsCompleted)
         StartHub();
 
+    if (!NativeUi.Focused())
+        scanRequested = false;
+    if (hub != null)
+        hub.ScanRequested = scanRequested;
     UpdateTray();
     ApplyTrayChoice(NativeUi.TakeTrayChoice());
 
@@ -78,9 +89,11 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
     if (frame == NativeUi.Frame.Hidden)
         continue;
 
-    int chosen = NativeUi.RateHeader(AppName, "Report rate", rateLabels, rateIndex);
-    if (chosen != rateIndex)
-        SetRate(chosen);
+    int chosen = NativeUi.ChoiceHeader(AppName, "Input", profileLabels, profileIndex);
+    if (chosen != profileIndex)
+        SetProfile(chosen);
+    if (hub != null)
+        DrawScanRow(hub);
 
     var pads = hub?.Snapshot() ?? Array.Empty<PadEntry>();
     if (pads.Count == 0)
@@ -129,7 +142,7 @@ void StartHub()
         Log.Write($"Driver: {driverReady.Exception!.InnerException}");
         return;
     }
-    hub = new LinkHub(ctx, rates[rateIndex]);
+    hub = new LinkHub(ctx, profileIntervalsUs[profileIndex]);
     message = "Ready";
     try { config = new ConfigServer(hub); }
     catch (Exception e)
@@ -139,21 +152,35 @@ void StartHub()
     }
 }
 
-void SetRate(int index)
+// Whether the app looks for gamepads nearby. With none open here it always does (so a gamepad
+// can be found and called); with one open, scanning costs it report rate, so it is the user's to
+// turn on, and turns off when the window loses focus.
+void DrawScanRow(LinkHub hub)
 {
-    rateIndex = index;
-    hub?.SetRate(rates[rateIndex]);
+    bool open = hub.AnyOpenHere;
+    bool scanning = hub.Searching;
+    string note = !open ? "Looking for gamepads nearby"
+                : scanning ? "Looking for gamepads nearby  ·  stop for full speed"
+                : "Full speed  ·  scan to find other gamepads nearby";
+    if (NativeUi.ScanBar(scanning, open, note))
+        scanRequested = !scanning;
+}
+
+void SetProfile(int index)
+{
+    profileIndex = index;
+    hub?.SetReportInterval(profileIntervalsUs[profileIndex]);
 }
 
 // The mode a session's gamepad is in (or is being put in), as an index into modeFormats
 int ModeIndex(PadSession session) => Array.IndexOf(modeFormats, session.WantedFormat ?? session.Format);
 
-// The tray menu's own items: the report rate, and each gamepad open here with its mode
+// The tray menu's own items: the input profile, and each gamepad open here with its mode
 void UpdateTray()
 {
-    var items = new List<NativeUi.TrayItem> { new("Report rate", 0, NativeUi.TraySubmenuStart) };
-    for (int i = 0; i < rates.Length; i++)
-        items.Add(new(rateLabels[i], TrayRateBase + i, i == rateIndex ? NativeUi.TrayChecked : 0));
+    var items = new List<NativeUi.TrayItem> { new("Input", 0, NativeUi.TraySubmenuStart) };
+    for (int i = 0; i < profileLabels.Length; i++)
+        items.Add(new(profileLabels[i], TrayProfileBase + i, i == profileIndex ? NativeUi.TrayChecked : 0));
     items.Add(new("", 0, NativeUi.TraySubmenuEnd));
 
     var pads = new List<string>();
@@ -178,14 +205,14 @@ void UpdateTray()
     NativeUi.SetTrayItems(items);
 }
 
-// A pick from the tray menu: a gamepad's mode, or the report rate
+// A pick from the tray menu: a gamepad's mode, or the input profile
 void ApplyTrayChoice(int pick)
 {
     int slot = (pick - TrayModeBase) / TrayModesPerPad;
     if (pick >= TrayModeBase && slot < trayPads.Count)
         hub?.SetMode(trayPads[slot], modeFormats[(pick - TrayModeBase) % TrayModesPerPad]);
-    else if (pick >= TrayRateBase && pick < TrayRateBase + rates.Length)
-        SetRate(pick - TrayRateBase);
+    else if (pick >= TrayProfileBase && pick < TrayProfileBase + profileLabels.Length)
+        SetProfile(pick - TrayProfileBase);
 }
 
 void DrawCard(PadEntry e)

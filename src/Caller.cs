@@ -42,6 +42,7 @@ sealed class Caller : IDisposable
     readonly Dictionary<string, string> _calls = new();    // Link address -> how its call or pairing went
     readonly Dictionary<ulong, DateTime> _notHoja = new(); // Connected devices without the call service
     readonly CancellationTokenSource _stop = new();
+    volatile bool _searching = true;
 
     public Caller()
     {
@@ -49,7 +50,27 @@ sealed class Caller : IDisposable
         // Active: the radio asks as well as listens, which finds a gamepad sooner
         _watcher = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
         _watcher.Received += OnReceived;
-        try { _watcher.Start(); }
+        Search(true);
+    }
+
+    // A gamepad open here in Link mode, by Link address: never read over LE (it has no LE there)
+    public Func<string, bool> IsOpenHere { get; set; } = _ => false;
+
+    // Whether to look for gamepads over LE: the watcher, and reading the ones connected over Classic.
+    // Both take the PC radio's airtime from a gamepad open here in Link mode. Measured on Windows:
+    // scanning cost it 13% of its report rate, trying an LE connection half.
+    public void Search(bool on)
+    {
+        _searching = on;
+        try
+        {
+            var status = _watcher.Status;
+            if (on && status is BluetoothLEAdvertisementWatcherStatus.Created
+                               or BluetoothLEAdvertisementWatcherStatus.Stopped)
+                _watcher.Start();
+            else if (!on && status == BluetoothLEAdvertisementWatcherStatus.Started)
+                _watcher.Stop();
+        }
         catch (Exception e) { Log.Write($"LE watcher: {e.Message}"); } // No LE radio: no calls
     }
 
@@ -192,8 +213,15 @@ sealed class Caller : IDisposable
     {
         while (!_stop.IsCancellationRequested)
         {
-            try { await ReadConnectedAsync(); }
-            catch (Exception e) { Log.Write($"Direct read: {e.GetType().Name} 0x{e.HResult:X8} {e.Message}"); }
+            try
+            {
+                if (_searching)
+                    await ReadConnectedAsync();
+            }
+            catch (Exception e)
+            {
+                Log.Write($"Direct read: {e.GetType().Name} 0x{e.HResult:X8} {e.Message}");
+            }
             try { await Task.Delay(DirectReadEveryMs, _stop.Token); }
             catch (OperationCanceledException) { return; }
         }
@@ -209,6 +237,8 @@ sealed class Caller : IDisposable
             if (classic == null)
                 continue;
             ulong address = classic.BluetoothAddress;
+            if (!_searching || IsOpenHere(address.ToString("X12")))
+                continue;
             lock (_lock)
                 if (_notHoja.TryGetValue(address, out var until) && DateTime.UtcNow < until)
                     continue;
