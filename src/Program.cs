@@ -193,7 +193,7 @@ void UpdateTray()
             continue;
         int firstId = TrayModeBase + pads.Count * TrayModesPerPad;
         pads.Add(e.Pad.Id);
-        items.Add(new(e.Pad.Name, 0, NativeUi.TraySubmenuStart));
+        items.Add(new(Title(e), 0, NativeUi.TraySubmenuStart));
         int current = ModeIndex(session);
         for (int m = 0; m < modeFormats.Length; m++)
             items.Add(new(modeTrayLabels[m], firstId + m, m == current ? NativeUi.TrayChecked : 0));
@@ -218,12 +218,14 @@ void ApplyTrayChoice(int pick)
         SetProfile(pick - TrayProfileBase);
 }
 
+// A gamepad's name: its model, and the user's name for it from the config app ("GCU 2 - Mitch")
+string Title(PadEntry e) => e.UserName.Length > 0 ? $"{e.Pad.Name} - {e.UserName}" : e.Pad.Name;
+
 void DrawCard(PadEntry e)
 {
     var session = e.Session;
     bool here = session is { State: not SessionState.Closed };
-    // With a user name set in the config app, it is the title and the model goes on the details line
-    string title = e.UserName.Length > 0 ? e.UserName : e.Pad.Name;
+    string title = Title(e);
     var look = CardLook(e, here);
 
     // A gamepad open here gets a mode picker
@@ -249,25 +251,24 @@ void DrawCard(PadEntry e)
     CardLook(PadEntry e, bool here)
 {
     string mode = Protocol.FormatName(e.Pad.Format);
-    string model = e.UserName.Length > 0 ? $"{e.Pad.Name}  ·  " : "";
 
     if (!here && e.Nearby != null && e.Known)
     {
         // Linked here before, connected somewhere else, and close by: it can be called over
         return ("Nearby", NativeUi.Status.Free, "Use here", true,
-                $"{model}{mode} on another device  ·  {e.Call ?? "Use here calls it over"}");
+                $"{mode} on another device  ·  {e.Call ?? "Use here calls it over"}");
     }
     if (!here && e.Nearby != null)
     {
         // Close by and not paired with this PC: pair it
         string hint = e.Nearby.Linked ? "linked to another PC; Pair adds this one" : "Pair sets it up here";
-        return ("New", NativeUi.Status.Free, "Pair", true, $"{model}{mode}  ·  {e.Call ?? hint}");
+        return ("New", NativeUi.Status.Free, "Pair", true, $"{mode}  ·  {e.Call ?? hint}");
     }
     if (e.Away)
     {
         string last = e.Pad.Format == Protocol.FormatNone ? "" : $"{mode}  ·  ";
         return ("Disconnected", NativeUi.Status.Problem, "Forget", false,
-                $"{model}{last}reconnects when it's back");
+                $"{last}reconnects when it's back");
     }
     if (here)
     {
