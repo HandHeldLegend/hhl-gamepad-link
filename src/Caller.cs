@@ -224,7 +224,18 @@ sealed class Caller : IDisposable
         Sighting? seen = Seen(id, TimeSpan.FromSeconds(90));
         if (seen == null)
             return "Not nearby";
-        try { return await WriteAsync(seen.LeAddress, new[] { Protocol.CallPair }); }
+        try
+        {
+            // [CallPair][this PC's address, as shown]: it pages here to pair
+            var adapter = await BluetoothAdapter.GetDefaultAsync();
+            if (adapter == null)
+                return "No Bluetooth on this PC";
+            var command = new byte[7];
+            command[0] = Protocol.CallPair;
+            for (int i = 0; i < 6; i++)
+                command[1 + i] = (byte)(adapter.BluetoothAddress >> (8 * (5 - i)));
+            return await WriteAsync(seen.LeAddress, command);
+        }
         catch (Exception e) { return $"Couldn't reach it: {e.Message}"; }
     }
 

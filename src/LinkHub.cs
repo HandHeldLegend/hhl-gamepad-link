@@ -34,6 +34,7 @@ sealed class LinkHub : IDisposable
     readonly HashSet<string> _refused = new();
     readonly Dictionary<string, byte> _modes = new();           // Picked here this run, by gamepad
     HashSet<string> _windowsPaired = new();                     // Known gamepads Windows holds a Link pairing for
+    readonly HashSet<string> _pairing = new();                  // Being paired now
 
     public int RateHz { get; private set; }
 
@@ -80,26 +81,25 @@ sealed class LinkHub : IDisposable
         }
     }
 
-    // Pair a gamepad seen nearby: it restarts findable for Link mode (if it isn't in use), and this
-    // app pairs it (then Link mode connects, and hands over its call token)
+    // Pair a gamepad seen nearby: it restarts in Link mode (if it isn't in use) and pages this PC,
+    // which pairs it; then Link mode connects, and hands over its call token. The card shows each
+    // step, as the gamepad's radio needs about 20 s before it can pair.
     public void Pair(string id)
     {
-        if (_caller.CallStatus(id) is string s && s.StartsWith("Pairing"))
-            return;
-        _caller.SetStatus(id, "Pairing…");
-        _ = Task.Run(async () =>
-        {
-            string? error = await _caller.AskToPairAsync(id);
-            if (error != null)
-            {
-                _caller.SetStatus(id, error);
+        lock (_lock)
+            if (!_pairing.Add(id))
                 return;
-            }
+        _caller.SetStatus(id, "Pairing…");
+        _ = Task.Run(() =>
+        {
             using var cancel = new CancellationTokenSource();
-            error = Pairing.Pair(id, 45, cancel.Token);
+            string? error = Pairing.PairAsked(id, () => _caller.AskToPairAsync(id).GetAwaiter().GetResult(), 45, cancel.Token,
+                                              step => _caller.SetStatus(id, step));
             _caller.SetStatus(id, error ?? "Paired: connecting…");
             if (error != null)
                 Log.Write($"Pairing {id}: {error}");
+            lock (_lock)
+                _pairing.Remove(id);
         });
     }
 

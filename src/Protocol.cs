@@ -30,7 +30,8 @@ static class Protocol
     public const byte MsgHost = 1, MsgWake = 2, MsgReport = 3, MsgOutput = 4, MsgConfig = 5, MsgToken = 7;
 
     // Calling a gamepad to Link (dongle_link.h): its LE advertisement and call service. The call is
-    // [CallToLink][token, 16]; the gamepad hands this app its token over Link (MsgToken).
+    // [CallToLink][token, 16]; the gamepad hands this app its token over Link (MsgToken). Pairing is
+    // [CallPair][this PC's address, as shown]: the gamepad pages this PC to pair.
     public static readonly Guid CallService = new("2a16dfe1-6d54-4505-91e8-c617ef490116");
     public static readonly Guid CallCommand = new("a210117a-ea18-4571-a927-4e6b5821b7cb");
     public static readonly Guid CallInfo = new("c864f062-886b-4079-bfcd-192dbd7a0a8c");
