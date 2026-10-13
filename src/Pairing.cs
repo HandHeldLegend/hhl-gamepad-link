@@ -1,12 +1,9 @@
-// Pairing a gamepad's Link mode from the app. Asked over LE (Caller), the gamepad restarts in Link
-// mode and pages this PC itself, so nobody searches; on that link Windows pairs it (Just Works,
-// accepted here), then the app turns on its HID service, which makes Windows connect to it.
-// Failing all that, the app pairs it as Windows' Add device would: pages it (it is findable too).
+// Pairing a gamepad's Link mode from the app. Asked over LE (Caller), the gamepad's radio comes up
+// as Link mode's and pages this PC, so nobody searches; on that link Windows pairs it (Just Works,
+// accepted here), then the app turns on its HID service, which makes Windows connect to it. Then
+// the gamepad restarts in Link mode, which calls this PC with its key in a few seconds.
+// Failing that, the app pairs it as Windows' Add device would: pages it (it is findable too).
 // Windows' own Bluetooth API (bthprops), user mode.
-//
-// The wait is the gamepad's radio: a CYW43 can't finish a pairing until about 20 s after it powers
-// up (measured on a GCU-2, whoever starts the pairing and whenever). Only pairing waits on it: a
-// paired gamepad connects with its key in a few seconds, even right after a restart.
 
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -43,36 +40,13 @@ static unsafe partial class Pairing
             string? error = ask();
             if (error != null)
                 return error;
-            var asked = t.Elapsed;
-            progress("Pairing 2/4: it's restarting in Link mode…");
-
-            // Its link comes up, then Windows pairs on it (the gamepad also may, after a while)
-            var until = DateTime.UtcNow.AddSeconds(PagedSeconds);
-            while (!IsPaired(address) && DateTime.UtcNow < until && !cancel.IsCancellationRequested)
+            progress("Pairing 2/4: it's calling this PC…");
+            if (WaitForLink(addr, cancel, out var link))
             {
-                var now = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
-                if (BluetoothGetDeviceInfo(0, ref now) == 0 && now.fConnected != 0)
-                {
-                    Log.Write($"Pairing {address}: its link is up, {t.ElapsedMilliseconds} ms after asking");
-                    // Windows' pairing call holds this thread until the radio is ready: count down meanwhile
-                    var ready = asked + TimeSpan.FromMilliseconds(RadioReadyMs);
-                    bool counting = true;
-                    using var countdown = new Timer(_ =>
-                    {
-                        if (!counting)
-                            return;
-                        int left = (int)Math.Ceiling((ready - t.Elapsed).TotalSeconds);
-                        progress(left > 0 ? $"Pairing 3/4: connected, its radio is getting ready (about {left} s)…"
-                                          : "Pairing 3/4: connected, finishing…");
-                    }, null, 0, 500);
-                    r = BluetoothAuthenticateDeviceEx(0, 0, ref now, 0, MitmNotRequiredGeneralBonding);
-                    counting = false;
-                    countdown.Dispose();
-                    if (r != 0)
-                        Log.Write($"Pairing {address}: pairing on its link failed (error {r})");
-                    break;
-                }
-                Thread.Sleep(100);
+                Log.Write($"Pairing {address}: its link is up, {t.ElapsedMilliseconds} ms after asking");
+                r = PairOnLink(ref link, progress);
+                if (r != 0)
+                    Log.Write($"Pairing {address}: pairing on its link failed (error {r})");
             }
         }
         finally
@@ -81,14 +55,43 @@ static unsafe partial class Pairing
         }
         if (!IsPaired(address))
         {
-            // An older gamepad (it only waits to be found), or its page didn't reach us
-            Log.Write($"Pairing {address}: it didn't page here in {PagedSeconds} s, paging it");
+            Log.Write($"Pairing {address}: not paired on its own link, paging it");
             progress("Pairing: looking for it…");
             return Pair(address, seconds, cancel);
         }
         Log.Write($"Pairing {address}: paired, {t.ElapsedMilliseconds} ms after asking");
         progress("Pairing 4/4: paired, setting it up on Windows…");
         return EnableHid(addr);
+    }
+
+    // The gamepad's page to this PC: its link up within PagedSeconds
+    static bool WaitForLink(ulong addr, CancellationToken cancel, out DeviceInfo link)
+    {
+        var until = DateTime.UtcNow.AddSeconds(PagedSeconds);
+        while (DateTime.UtcNow < until && !cancel.IsCancellationRequested)
+        {
+            link = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
+            if (BluetoothGetDeviceInfo(0, ref link) == 0 && link.fConnected != 0)
+                return true;
+            Thread.Sleep(100);
+        }
+        link = default;
+        return false;
+    }
+
+    // Windows pairs on the gamepad's link: about a second (measured on a GCU-2)
+    static uint PairOnLink(ref DeviceInfo link, Action<string> progress)
+    {
+        progress("Pairing 3/4: connected, pairing…");
+        bool waiting = true;
+        using var slow = new Timer(_ =>
+        {
+            if (waiting)
+                progress("Pairing 3/4: connected, pairing (taking longer than usual)…");
+        }, null, SlowPairMs, Timeout.Infinite);
+        uint r = BluetoothAuthenticateDeviceEx(0, 0, ref link, 0, MitmNotRequiredGeneralBonding);
+        waiting = false;
+        return r;
     }
 
     // Pair the device at this address (as shown), paging it for up to `seconds`. Returns null when
@@ -207,8 +210,8 @@ static unsafe partial class Pairing
 
     const uint MitmNotRequiredGeneralBonding = 4, ServiceEnable = 1;
     const int DirectTries = 4;
-    const int PagedSeconds = 20; // The gamepad restarts, then pages up to 3 x 5.12 s
-    const int RadioReadyMs = 19000; // After asking: it restarts, and its radio can pair ~20 s after
+    const int PagedSeconds = 20; // The gamepad's radio restarts, then pages up to 3 x 5.12 s
+    const int SlowPairMs = 3000; // Pairing on its link that takes longer than this: say so
     static readonly Guid HidService = new("00001124-0000-1000-8000-00805f9b34fb");
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

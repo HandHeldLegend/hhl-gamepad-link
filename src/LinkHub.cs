@@ -81,9 +81,8 @@ sealed class LinkHub : IDisposable
         }
     }
 
-    // Pair a gamepad seen nearby: it restarts in Link mode (if it isn't in use) and pages this PC,
-    // which pairs it; then Link mode connects, and hands over its call token. The card shows each
-    // step, as the gamepad's radio needs about 20 s before it can pair.
+    // Pair a gamepad seen nearby (if it isn't in use): it pages this PC, which pairs it; then it
+    // restarts in Link mode, which connects and hands over its call token. The card shows each step.
     public void Pair(string id)
     {
         lock (_lock)
