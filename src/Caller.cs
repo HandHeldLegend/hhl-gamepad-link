@@ -273,7 +273,7 @@ sealed class Caller : IDisposable
                                                                                   GattWriteOption.WriteWithResponse);
             return result.Status == GattCommunicationStatus.Success ? null
                  : result.ProtocolError == 0x03 ? (command[0] == Protocol.CallPair
-                                                    ? "It refused to pair"
+                                                    ? "It's in use by another device: pair it while it isn't connected"
                                                     : "It refused the call (paired with another PC?)")
                  : $"It didn't answer ({result.Status})";
         }

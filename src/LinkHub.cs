@@ -80,13 +80,13 @@ sealed class LinkHub : IDisposable
         }
     }
 
-    // Pair a gamepad seen nearby: it asks for its pairing combo, restarts findable for Link mode, and
-    // this app pairs it (then Link mode connects, and hands over its call token)
+    // Pair a gamepad seen nearby: it restarts findable for Link mode (if it isn't in use), and this
+    // app pairs it (then Link mode connects, and hands over its call token)
     public void Pair(string id)
     {
-        if (_caller.CallStatus(id) is string s && (s.StartsWith("On the gamepad") || s.StartsWith("Asking")))
+        if (_caller.CallStatus(id) is string s && s.StartsWith("Pairing"))
             return;
-        _caller.SetStatus(id, "Asking it to pair…");
+        _caller.SetStatus(id, "Pairing…");
         _ = Task.Run(async () =>
         {
             string? error = await _caller.AskToPairAsync(id);
@@ -95,7 +95,6 @@ sealed class LinkHub : IDisposable
                 _caller.SetStatus(id, error);
                 return;
             }
-            _caller.SetStatus(id, "On the gamepad, hold its pairing combo (or Home) for 1 s");
             using var cancel = new CancellationTokenSource();
             error = Pairing.Pair(id, 45, cancel.Token);
             _caller.SetStatus(id, error ?? "Paired: connecting…");

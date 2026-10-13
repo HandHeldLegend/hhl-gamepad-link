@@ -195,7 +195,7 @@ void DrawCard(PadEntry e)
         colour = NativeUi.Status.Free;
         button = "Pair";
         accent = true;
-        detail = $"{model}{mode}  ·  {e.Call ?? (e.Nearby.Linked ? "linked to another PC; Pair adds this one" : "Pair, then hold its pairing combo (or Home) for 1 s")}";
+        detail = $"{model}{mode}  ·  {e.Call ?? (e.Nearby.Linked ? "linked to another PC; Pair adds this one" : "Pair sets it up here")}";
     }
     else if (e.Away)
     {

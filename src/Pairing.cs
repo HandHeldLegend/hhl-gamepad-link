@@ -28,22 +28,33 @@ static unsafe partial class Pairing
         if (BluetoothGetDeviceInfo(0, ref info) == 0 && info.fAuthenticated != 0)
             BluetoothRemoveDevice(&addr);
 
-        if (!Find(addr, seconds, cancel, out info))
-            return "It didn't show up to pair (was the pairing combo pressed?)";
+        // The search can answer from Windows' cache before the gamepad is up in pairing, so a failed
+        // attempt is tried again until the time is up
+        var until = DateTime.UtcNow.AddSeconds(seconds);
+        uint r = 0;
+        while (true)
+        {
+            int left = (int)(until - DateTime.UtcNow).TotalSeconds;
+            if (left <= 0 || cancel.IsCancellationRequested)
+                return r == 0 ? "It didn't show up to pair" : $"Pairing failed (error {r})";
+            if (!Find(addr, left, cancel, out info))
+                return "It didn't show up to pair";
 
-        nint registration;
-        uint r = BluetoothRegisterForAuthenticationEx(ref info, out registration, &OnAuthentication, 0);
-        if (r != 0)
-            return $"Couldn't take the pairing request (error {r})";
-        try
-        {
-            r = BluetoothAuthenticateDeviceEx(0, 0, ref info, 0, MitmNotRequiredGeneralBonding);
+            nint registration;
+            r = BluetoothRegisterForAuthenticationEx(ref info, out registration, &OnAuthentication, 0);
             if (r != 0)
-                return $"Pairing failed (error {r})";
-        }
-        finally
-        {
-            BluetoothUnregisterAuthentication(registration);
+                return $"Couldn't take the pairing request (error {r})";
+            try
+            {
+                r = BluetoothAuthenticateDeviceEx(0, 0, ref info, 0, MitmNotRequiredGeneralBonding);
+            }
+            finally
+            {
+                BluetoothUnregisterAuthentication(registration);
+            }
+            if (r == 0)
+                break;
+            Thread.Sleep(1000);
         }
 
         Guid hid = HidService;
