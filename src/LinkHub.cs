@@ -190,7 +190,9 @@ sealed class LinkHub : IDisposable
     {
         bool here = s.State != SessionState.Closed;
         var known = KnownPads.Get(s.Id);
-        return new PadEntry(s.Pad!, s, !here && s.Reason == CloseReason.WentAway, _refused.Contains(s.Id),
+        // Its model as it advertises it: its mode's name (a console's, "Pro Controller") is not
+        var pad = known != null ? s.Pad! with { Name = known.Name } : s.Pad!;
+        return new PadEntry(pad, s, !here && s.Reason == CloseReason.WentAway, _refused.Contains(s.Id),
                             here ? null : _caller.Seen(s.Id, NearbyFor), _caller.CallStatus(s.Id),
                             known != null && _windowsPaired.Contains(s.Id), known?.UserName ?? "");
     }

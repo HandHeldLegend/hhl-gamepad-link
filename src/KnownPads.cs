@@ -31,22 +31,28 @@ static class KnownPads
         {
             var pads = Load();
             pads.TryGetValue(id, out var known);
-            if (known != null && known.Name == name && known.Token.AsSpan().SequenceEqual(token))
+            if (known != null && known.Token.AsSpan().SequenceEqual(token))
                 return;
-            pads[id] = new Pad(id, token, name, known?.UserName ?? "", known?.Mode ?? Protocol.FormatNone);
+            // A name it is known by stays: `name` is its mode's, which may be a console's
+            pads[id] = new Pad(id, token, known?.Name ?? name, known?.UserName ?? "",
+                               known?.Mode ?? Protocol.FormatNone);
             Save(pads);
         }
     }
 
-    // The user's name for a known gamepad (from its advertisement), when it changes
-    public static void SetUserName(string id, string userName)
+    // A known gamepad's model and the user's name for it (from its advertisement or info), when they
+    // change; null leaves one as it is
+    public static void SetNames(string id, string? name, string? userName)
     {
         lock (_lock)
         {
             var pads = Load();
-            if (!pads.TryGetValue(id, out var known) || known.UserName == userName)
+            if (!pads.TryGetValue(id, out var known))
                 return;
-            pads[id] = known with { UserName = userName };
+            var named = known with { Name = name ?? known.Name, UserName = userName ?? known.UserName };
+            if (named == known)
+                return;
+            pads[id] = named;
             Save(pads);
         }
     }

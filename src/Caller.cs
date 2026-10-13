@@ -201,8 +201,7 @@ sealed class Caller : IDisposable
             if (!_seen.TryGetValue(id, out var s))
                 return;
             _seen[id] = s with { Name = name.Length > 0 ? name : s.Name, UserName = user ?? s.UserName };
-            if (user != null)
-                KnownPads.SetUserName(id, user);
+            KnownPads.SetNames(id, name.Length > 0 ? name : null, user);
         }
     }
 
@@ -280,8 +279,7 @@ sealed class Caller : IDisposable
                                      DateTime.UtcNow);
             _byLe[address] = id;
         }
-        if (user.Length > 0)
-            KnownPads.SetUserName(id, user);
+        KnownPads.SetNames(id, name.Length > 0 ? name : null, user);
         return true;
     }
 
