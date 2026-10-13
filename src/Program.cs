@@ -172,18 +172,30 @@ void DrawCard(PadEntry e)
     var session = e.Session;
     bool here = session is { State: not SessionState.Closed };
     string mode = Protocol.FormatName(e.Pad.Format);
+    // With a user name set in the config app, it is the title and the model goes on the details line
+    string title = e.UserName.Length > 0 ? e.UserName : e.Pad.Title;
+    string model = e.UserName.Length > 0 ? $"{e.Pad.Name}  ·  " : "";
 
     string status, button, detail;
     NativeUi.Status colour;
     bool accent;
-    if (!here && e.Nearby != null)
+    if (!here && e.Nearby != null && e.Known)
     {
-        // Connected somewhere else, and close by: it can be called over
+        // Linked here before, connected somewhere else, and close by: it can be called over
         status = "Nearby";
         colour = NativeUi.Status.Free;
         button = "Use here";
         accent = true;
-        detail = $"{mode} on another device  ·  {e.Call ?? "Use here calls it over"}";
+        detail = $"{model}{mode} on another device  ·  {e.Call ?? "Use here calls it over"}";
+    }
+    else if (!here && e.Nearby != null)
+    {
+        // Close by and not paired with this PC: pair it (confirmed with its pairing combo)
+        status = "New";
+        colour = NativeUi.Status.Free;
+        button = "Pair";
+        accent = true;
+        detail = $"{model}{mode}  ·  {e.Call ?? (e.Nearby.Linked ? "linked to another PC; Pair adds this one" : "Pair, then hold its pairing combo (or Home) for 1 s")}";
     }
     else if (e.Away)
     {
@@ -219,7 +231,7 @@ void DrawCard(PadEntry e)
     }
 
     // A gamepad open here gets a mode picker
-    var (clicked, picked) = NativeUi.Card(e.Pad.Id, e.Pad.Title, detail, status, colour, 0, button, accent,
+    var (clicked, picked) = NativeUi.Card(e.Pad.Id, title, detail, status, colour, 0, button, accent,
         here ? modeLabels : null, here ? ModeIndex(session!) : -1);
     if (picked is int m)
         hub!.SetMode(e.Pad.Id, modeFormats[m]);
@@ -227,8 +239,10 @@ void DrawCard(PadEntry e)
     {
         if (here)
             hub!.Close(e.Pad.Id);
-        else if (e.Nearby != null)
+        else if (e.Nearby != null && e.Known)
             hub!.Call(e.Pad.Id);
+        else if (e.Nearby != null)
+            hub!.Pair(e.Pad.Id);
         else
             hub!.Forget(e.Pad.Id);
     }

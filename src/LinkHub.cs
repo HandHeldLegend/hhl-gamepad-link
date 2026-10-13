@@ -10,10 +10,10 @@ using HIDMaestro;
 namespace HhlGamepadLink;
 
 // A gamepad as the list shows it. Away: it was here and has gone quiet. Refused: disconnected here.
-// Nearby: not here, but advertising (connected elsewhere), so it can be called over; Call says how
-// the last call went.
+// Nearby: not here, but advertising (connected elsewhere). Known: it gave this app its call token,
+// so it can be called over; otherwise it can be paired. Call says how the last call or pairing went.
 sealed record PadEntry(PadIdentity Pad, PadSession? Session, bool Away, bool Refused, Caller.Sighting? Nearby,
-                       string? Call);
+                       string? Call, bool Known = true, string UserName = "");
 
 sealed class LinkHub : IDisposable
 {
@@ -59,16 +59,47 @@ sealed class LinkHub : IDisposable
                                         _caller.CallStatus(s.Id));
                 })
                 .ToList();
-            // Gamepads linked here before, not here this run, but advertising nearby
-            foreach (var known in KnownPads.All())
+            entries = entries.Select(e => KnownPads.Get(e.Pad.Id) is KnownPads.Pad k
+                                          ? e with { UserName = k.UserName }
+                                          : e with { Known = false }).ToList();
+            // Gamepads advertising nearby that aren't here this run: linked here before (call them
+            // over), or not (pair them)
+            foreach (var (id, seen) in _caller.Nearby(NearbyFor))
             {
-                if (_sessions.ContainsKey(known.Id) || _caller.Seen(known.Id, NearbyFor) is not Caller.Sighting seen)
+                if (_sessions.ContainsKey(id))
                     continue;
-                var pad = new PadIdentity(known.Id, known.Name, "", 0, 0, seen.Format, 0, false);
-                entries.Add(new PadEntry(pad, null, false, false, seen, _caller.CallStatus(known.Id)));
+                var known = KnownPads.Get(id);
+                string name = seen.Name.Length > 0 ? seen.Name : known?.Name ?? "HOJA gamepad";
+                var pad = new PadIdentity(id, name, "", 0, 0, seen.Format, 0, false);
+                entries.Add(new PadEntry(pad, null, false, false, seen, _caller.CallStatus(id), known != null,
+                                         seen.UserName.Length > 0 ? seen.UserName : known?.UserName ?? ""));
             }
-            return entries.OrderBy(e => e.Pad.Title).ThenBy(e => e.Pad.Id).ToList();
+            return entries.OrderBy(e => e.UserName.Length > 0 ? e.UserName : e.Pad.Title).ThenBy(e => e.Pad.Id).ToList();
         }
+    }
+
+    // Pair a gamepad seen nearby: it asks for its pairing combo, restarts findable for Link mode, and
+    // this app pairs it (then Link mode connects, and hands over its call token)
+    public void Pair(string id)
+    {
+        if (_caller.CallStatus(id) is string s && (s.StartsWith("On the gamepad") || s.StartsWith("Asking")))
+            return;
+        _caller.SetStatus(id, "Asking it to pair…");
+        _ = Task.Run(async () =>
+        {
+            string? error = await _caller.AskToPairAsync(id);
+            if (error != null)
+            {
+                _caller.SetStatus(id, error);
+                return;
+            }
+            _caller.SetStatus(id, "On the gamepad, hold its pairing combo (or Home) for 1 s");
+            using var cancel = new CancellationTokenSource();
+            error = Pairing.Pair(id, 45, cancel.Token);
+            _caller.SetStatus(id, error ?? "Paired: connecting…");
+            if (error != null)
+                Log.Write($"Pairing {id}: {error}");
+        });
     }
 
     // Call a gamepad over from wherever it is connected (it must have been in Link mode here once)

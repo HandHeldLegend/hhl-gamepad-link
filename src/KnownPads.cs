@@ -1,13 +1,13 @@
 // Gamepads that have been in Link mode on this PC, kept between runs in
-// %LOCALAPPDATA%\HHL Gamepad Link\pads.ini (one "id=token|name" line each): the call token each one
-// gave this app (so it can call the gamepad over from wherever it is connected) and its name, for
-// the list while it is elsewhere.
+// %LOCALAPPDATA%\HHL Gamepad Link\pads.ini (one "id=token|name|user name" line each): the call token
+// each one gave this app (so it can call the gamepad over from wherever it is connected), and its
+// names, for the list while it is elsewhere.
 
 namespace HhlGamepadLink;
 
 static class KnownPads
 {
-    public sealed record Pad(string Id, byte[] Token, string Name);
+    public sealed record Pad(string Id, byte[] Token, string Name, string UserName = "");
 
     static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad Link", "pads.ini");
@@ -26,12 +26,13 @@ static class KnownPads
                 var kv = line.Split('=', 2);
                 if (kv.Length != 2)
                     continue;
-                var parts = kv[1].Split('|', 2);
+                var parts = kv[1].Split('|', 3);
                 try
                 {
                     var token = Convert.FromHexString(parts[0]);
                     if (token.Length == Protocol.TokenLength)
-                        _pads[kv[0]] = new Pad(kv[0], token, parts.Length > 1 ? parts[1] : kv[0]);
+                        _pads[kv[0]] = new Pad(kv[0], token, parts.Length > 1 ? parts[1] : kv[0],
+                                               parts.Length > 2 ? parts[2] : "");
                 }
                 catch (FormatException) { }
             }
@@ -60,7 +61,20 @@ static class KnownPads
             var pads = Load();
             if (pads.TryGetValue(id, out var known) && known.Token.AsSpan().SequenceEqual(token) && known.Name == name)
                 return;
-            pads[id] = new Pad(id, token, name);
+            pads[id] = new Pad(id, token, name, known?.UserName ?? "");
+            Save(pads);
+        }
+    }
+
+    // The user's name for a known gamepad (from its advertisement), when it changes
+    public static void SetUserName(string id, string userName)
+    {
+        lock (Lock)
+        {
+            var pads = Load();
+            if (!pads.TryGetValue(id, out var known) || known.UserName == userName)
+                return;
+            pads[id] = known with { UserName = userName };
             Save(pads);
         }
     }
@@ -79,7 +93,7 @@ static class KnownPads
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllLines(FilePath, pads.Values.Select(p => $"{p.Id}={Convert.ToHexString(p.Token)}|{p.Name}"));
+            File.WriteAllLines(FilePath, pads.Values.Select(p => $"{p.Id}={Convert.ToHexString(p.Token)}|{p.Name}|{p.UserName}"));
         }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }

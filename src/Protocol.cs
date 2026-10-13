@@ -33,7 +33,7 @@ static class Protocol
     // [CallToLink][token, 16]; the gamepad hands this app its token over Link (MsgToken).
     public static readonly Guid CallService = new("2a16dfe1-6d54-4505-91e8-c617ef490116");
     public static readonly Guid CallCommand = new("a210117a-ea18-4571-a927-4e6b5821b7cb");
-    public const byte CallVersion = 1, CallToLink = 1;
+    public const byte CallVersion = 2, CallToLink = 1, CallPair = 2, CallLinked = 0x01;
     public const int TokenLength = 16;
 
     public const byte DongleProtocol = 3;   // DONGLE_PROTOCOL_VERSION
