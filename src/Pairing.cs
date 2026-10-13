@@ -9,6 +9,14 @@ namespace HhlGamepadLink;
 
 static unsafe partial class Pairing
 {
+    // Whether Windows holds a pairing for this address (as shown). Removed in Settings, it doesn't, and
+    // the gamepad can't connect to this PC however it is called.
+    public static bool IsPaired(string address)
+    {
+        var info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = Convert.ToUInt64(address, 16) };
+        return BluetoothGetDeviceInfo(0, ref info) == 0 && info.fAuthenticated != 0;
+    }
+
     // Pair the device at this address (as shown, "6AF4B0E017F2"), searching for up to `seconds`.
     // Returns null when paired and its HID service is on, else what went wrong.
     public static string? Pair(string address, int seconds, CancellationToken cancel)

@@ -1,10 +1,15 @@
 // Calling gamepads over to Link from wherever they are connected (dongle_link.h, "Calling it to
-// Link"): a gamepad with a Link pairing advertises over Bluetooth LE in its direct Bluetooth modes,
-// this app watches for that, and a call (the gamepad's token, written to its call service) brings it
-// over. All user mode (WinRT).
+// Link"): a gamepad advertises over Bluetooth LE in its direct Bluetooth modes, this app watches for
+// that, and a call (the gamepad's token, written to its call service) brings it over. All user mode
+// (WinRT).
+//
+// Advertisements are slow to catch (once a second, and Windows' background scan misses most), so a
+// gamepad connected to this PC over Classic is also read directly: its LE address is its Classic one,
+// and its call service's info characteristic says the same as its advertisement.
 
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
+using Windows.Devices.Enumeration;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Storage.Streams;
 
@@ -21,9 +26,12 @@ sealed class Caller : IDisposable
     readonly Dictionary<string, Sighting> _seen = new();    // By Link address
     readonly Dictionary<ulong, string> _byLe = new();      // LE address -> Link address (scan responses)
     readonly Dictionary<string, string> _calls = new();    // Link address -> how its call or pairing went
+    readonly Dictionary<ulong, DateTime> _notHoja = new(); // Connected devices without the call service
+    readonly CancellationTokenSource _stop = new();
 
     public Caller()
     {
+        _ = Task.Run(DirectLoop);
         // Active: the radio asks as well as listens, which finds a gamepad sooner
         _watcher = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
         _watcher.Received += OnReceived;
@@ -92,6 +100,78 @@ sealed class Caller : IDisposable
     {
         lock (_lock)
             _calls[id] = status;
+    }
+
+    // Every few seconds: the devices connected to this PC over Classic, read through the call service
+    async Task DirectLoop()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            try
+            {
+                var connected = await DeviceInformation.FindAllAsync(
+                    BluetoothDevice.GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus.Connected));
+                foreach (var info in connected)
+                {
+                    using var classic = await BluetoothDevice.FromIdAsync(info.Id);
+                    if (classic == null)
+                        continue;
+                    ulong address = classic.BluetoothAddress;
+                    lock (_lock)
+                        if (_notHoja.TryGetValue(address, out var until) && DateTime.UtcNow < until)
+                            continue;
+                    if (!await ReadInfoAsync(address))
+                        lock (_lock)
+                            _notHoja[address] = DateTime.UtcNow.AddMinutes(5);
+                }
+            }
+            catch (Exception e) { Log.Write($"Direct read: {e.Message}"); }
+            try { await Task.Delay(5000, _stop.Token); }
+            catch (OperationCanceledException) { return; }
+        }
+    }
+
+    // [version][mode][flags][Link address, 6][name length][name][user name length][user name]
+    async Task<bool> ReadInfoAsync(ulong address)
+    {
+        using var device = await BluetoothLEDevice.FromBluetoothAddressAsync(address);
+        if (device == null)
+            return false;
+        var services = await device.GetGattServicesForUuidAsync(Protocol.CallService, BluetoothCacheMode.Uncached);
+        if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
+            return false;
+        using var service = services.Services[0];
+        var chars = await service.GetCharacteristicsForUuidAsync(Protocol.CallInfo, BluetoothCacheMode.Uncached);
+        if (chars.Status != GattCommunicationStatus.Success || chars.Characteristics.Count == 0)
+            return true; // A gamepad with older firmware: its advertisements still find it
+        var read = await chars.Characteristics[0].ReadValueAsync(BluetoothCacheMode.Uncached);
+        if (read.Status != GattCommunicationStatus.Success)
+            return true;
+        var b = new byte[read.Value.Length];
+        DataReader.FromBuffer(read.Value).ReadBytes(b);
+        if (b.Length < 11 || b[0] != Protocol.CallVersion)
+            return true;
+        string id = Convert.ToHexString(b, 3, 6);
+        int at = 9;
+        string name = Text(b, ref at), user = Text(b, ref at);
+        lock (_lock)
+        {
+            _seen[id] = new Sighting(address, b[1], (b[2] & Protocol.CallLinked) != 0, name, user, DateTime.UtcNow);
+            _byLe[address] = id;
+        }
+        if (user.Length > 0)
+            KnownPads.SetUserName(id, user);
+        return true;
+    }
+
+    static string Text(byte[] b, ref int at)
+    {
+        if (at >= b.Length)
+            return "";
+        int len = Math.Min(b[at], b.Length - at - 1);
+        string s = System.Text.Encoding.UTF8.GetString(b, at + 1, len).TrimEnd('\0').Trim();
+        at += 1 + len;
+        return s;
     }
 
     // 128-bit UUIDs go little-endian on the air
@@ -205,6 +285,7 @@ sealed class Caller : IDisposable
 
     public void Dispose()
     {
+        _stop.Cancel();
         try { _watcher.Stop(); }
         catch (Exception) { }
     }

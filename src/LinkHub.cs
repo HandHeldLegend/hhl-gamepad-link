@@ -33,6 +33,7 @@ sealed class LinkHub : IDisposable
     readonly Dictionary<string, PadSession> _sessions = new();  // By gamepad (Link address)
     readonly HashSet<string> _refused = new();
     readonly Dictionary<string, byte> _modes = new();           // Picked here this run, by gamepad
+    HashSet<string> _windowsPaired = new();                     // Known gamepads Windows holds a Link pairing for
 
     public int RateHz { get; private set; }
 
@@ -60,7 +61,7 @@ sealed class LinkHub : IDisposable
                 })
                 .ToList();
             entries = entries.Select(e => KnownPads.Get(e.Pad.Id) is KnownPads.Pad k
-                                          ? e with { UserName = k.UserName }
+                                          ? e with { UserName = k.UserName, Known = _windowsPaired.Contains(k.Id) }
                                           : e with { Known = false }).ToList();
             // Gamepads advertising nearby that aren't here this run: linked here before (call them
             // over), or not (pair them)
@@ -71,7 +72,8 @@ sealed class LinkHub : IDisposable
                 var known = KnownPads.Get(id);
                 string name = seen.Name.Length > 0 ? seen.Name : known?.Name ?? "HOJA gamepad";
                 var pad = new PadIdentity(id, name, "", 0, 0, seen.Format, 0, false);
-                entries.Add(new PadEntry(pad, null, false, false, seen, _caller.CallStatus(id), known != null,
+                entries.Add(new PadEntry(pad, null, false, false, seen, _caller.CallStatus(id),
+                                         known != null && _windowsPaired.Contains(id),
                                          seen.UserName.Length > 0 ? seen.UserName : known?.UserName ?? ""));
             }
             return entries.OrderBy(e => e.UserName.Length > 0 ? e.UserName : e.Pad.Title).ThenBy(e => e.Pad.Id).ToList();
@@ -105,6 +107,11 @@ sealed class LinkHub : IDisposable
     // Call a gamepad over from wherever it is connected (it must have been in Link mode here once)
     public void Call(string id)
     {
+        if (!Pairing.IsPaired(id))
+        {
+            Pair(id); // Its pairing went from Windows: set it up again
+            return;
+        }
         if (KnownPads.Get(id) is KnownPads.Pad known)
         {
             lock (_lock)
@@ -123,7 +130,11 @@ sealed class LinkHub : IDisposable
             {
                 try { Scan(); }
                 catch (Exception e) { Log.Write($"Link scan: {e}"); }
-                nextScan = now + 1000;
+                // A pairing removed in Windows' settings: the gamepad needs pairing again, not a call
+                var paired = KnownPads.All().Where(k => Pairing.IsPaired(k.Id)).Select(k => k.Id).ToHashSet();
+                lock (_lock)
+                    _windowsPaired = paired;
+                nextScan = now + 2000;
             }
             lock (_lock)
             {
