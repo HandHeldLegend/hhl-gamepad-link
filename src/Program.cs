@@ -176,7 +176,16 @@ void DrawCard(PadEntry e)
     string status, button, detail;
     NativeUi.Status colour;
     bool accent;
-    if (e.Away)
+    if (!here && e.Nearby != null)
+    {
+        // Connected somewhere else, and close by: it can be called over
+        status = "Nearby";
+        colour = NativeUi.Status.Free;
+        button = "Use here";
+        accent = true;
+        detail = $"{mode} on another device  ·  {e.Call ?? "Use here calls it over"}";
+    }
+    else if (e.Away)
     {
         status = "Disconnected";
         colour = NativeUi.Status.Problem;
@@ -218,6 +227,8 @@ void DrawCard(PadEntry e)
     {
         if (here)
             hub!.Close(e.Pad.Id);
+        else if (e.Nearby != null)
+            hub!.Call(e.Pad.Id);
         else
             hub!.Forget(e.Pad.Id);
     }

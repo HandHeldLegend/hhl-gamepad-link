@@ -194,6 +194,11 @@ sealed class PadSession
         case Protocol.MsgReport:
             OnCommandReply(p.Slice(0, Math.Min(p.Length, 64)));
             break;
+        case Protocol.MsgToken:
+            // Kept, so this app can call the gamepad over from wherever it is connected
+            if (p.Length >= Protocol.TokenLength)
+                KnownPads.Remember(Id, p.Slice(0, Protocol.TokenLength).ToArray(), Pad?.Name ?? Id);
+            break;
         case Protocol.MsgConfig:
             ConfigFromGamepad?.Invoke(p.ToArray());
             break;

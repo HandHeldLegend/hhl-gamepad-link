@@ -27,7 +27,14 @@ static class Protocol
     public const int MessageMax = 65; // DONGLE_LINK_MSG_MAX: a type byte and 64
 
     // dongle_link_msg_t
-    public const byte MsgHost = 1, MsgWake = 2, MsgReport = 3, MsgOutput = 4, MsgConfig = 5;
+    public const byte MsgHost = 1, MsgWake = 2, MsgReport = 3, MsgOutput = 4, MsgConfig = 5, MsgToken = 7;
+
+    // Calling a gamepad to Link (dongle_link.h): its LE advertisement and call service. The call is
+    // [CallToLink][token, 16]; the gamepad hands this app its token over Link (MsgToken).
+    public static readonly Guid CallService = new("2a16dfe1-6d54-4505-91e8-c617ef490116");
+    public static readonly Guid CallCommand = new("a210117a-ea18-4571-a927-4e6b5821b7cb");
+    public const byte CallVersion = 1, CallToLink = 1;
+    public const int TokenLength = 16;
 
     public const byte DongleProtocol = 3;   // DONGLE_PROTOCOL_VERSION
     public const byte BoardPcApp = 4;       // dongle_board_t: this app

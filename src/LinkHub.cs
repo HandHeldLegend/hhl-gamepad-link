@@ -10,15 +10,21 @@ using HIDMaestro;
 namespace HhlGamepadLink;
 
 // A gamepad as the list shows it. Away: it was here and has gone quiet. Refused: disconnected here.
-sealed record PadEntry(PadIdentity Pad, PadSession? Session, bool Away, bool Refused);
+// Nearby: not here, but advertising (connected elsewhere), so it can be called over; Call says how
+// the last call went.
+sealed record PadEntry(PadIdentity Pad, PadSession? Session, bool Away, bool Refused, Caller.Sighting? Nearby,
+                       string? Call);
 
 sealed class LinkHub : IDisposable
 {
     const long HeartbeatMs = 1000;
     const long AwayAfterMs = 2000; // No report this long: the gamepad is away (the link reports far faster)
 
+    static readonly TimeSpan NearbyFor = TimeSpan.FromSeconds(90); // Advertising every 1 s, but a busy radio scans poorly (10-45 s between sightings measured)
+
     readonly HMContext _ctx;
     readonly GcAdapter _adapter;
+    readonly Caller _caller = new();
     readonly Thread _thread;
     volatile bool _running = true;
 
@@ -43,12 +49,36 @@ sealed class LinkHub : IDisposable
     {
         lock (_lock)
         {
-            return _sessions.Values
+            var entries = _sessions.Values
                 .Where(s => s.Pad != null)
-                .Select(s => new PadEntry(s.Pad!, s, s.State == SessionState.Closed && s.Reason == CloseReason.WentAway,
-                                          _refused.Contains(s.Id)))
-                .OrderBy(e => e.Pad.Title).ThenBy(e => e.Pad.Id)
+                .Select(s =>
+                {
+                    bool here = s.State != SessionState.Closed;
+                    return new PadEntry(s.Pad!, s, s.State == SessionState.Closed && s.Reason == CloseReason.WentAway,
+                                        _refused.Contains(s.Id), here ? null : _caller.Seen(s.Id, NearbyFor),
+                                        _caller.CallStatus(s.Id));
+                })
                 .ToList();
+            // Gamepads linked here before, not here this run, but advertising nearby
+            foreach (var known in KnownPads.All())
+            {
+                if (_sessions.ContainsKey(known.Id) || _caller.Seen(known.Id, NearbyFor) is not Caller.Sighting seen)
+                    continue;
+                var pad = new PadIdentity(known.Id, known.Name, "", 0, 0, seen.Format, 0, false);
+                entries.Add(new PadEntry(pad, null, false, false, seen, _caller.CallStatus(known.Id)));
+            }
+            return entries.OrderBy(e => e.Pad.Title).ThenBy(e => e.Pad.Id).ToList();
+        }
+    }
+
+    // Call a gamepad over from wherever it is connected (it must have been in Link mode here once)
+    public void Call(string id)
+    {
+        if (KnownPads.Get(id) is KnownPads.Pad known)
+        {
+            lock (_lock)
+                _refused.Remove(id);
+            _caller.Call(id, known.Token);
         }
     }
 
@@ -163,7 +193,7 @@ sealed class LinkHub : IDisposable
         }
     }
 
-    // Drop a gamepad that went away from the list
+    // Drop a gamepad from the list, and its call token: it is called over no more
     public void Forget(string id)
     {
         lock (_lock)
@@ -172,6 +202,7 @@ sealed class LinkHub : IDisposable
             if (_sessions.Remove(id, out var session))
                 session.Close("Forgotten", CloseReason.Closed);
         }
+        KnownPads.Forget(id);
     }
 
     // Put a gamepad in a mode for the rest of this run: now if it is here, and each time it comes back
@@ -221,6 +252,7 @@ sealed class LinkHub : IDisposable
                 d.Dispose();
             _devices.Clear();
         }
+        _caller.Dispose();
         _adapter.Dispose();
     }
 }
