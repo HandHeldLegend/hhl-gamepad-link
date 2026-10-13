@@ -200,12 +200,13 @@ void DrawCard(PadEntry e)
     }
     else
     {
-        // Disconnected here: turned away until opened again
-        status = "Closed";
+        // Disconnected here: handed back. It looks for a dongle, and comes back here when it is next
+        // started in dongle mode (a gamepad only calls this PC as it starts)
+        status = e.Refused ? "Releasing…" : "Released";
         colour = NativeUi.Status.Free;
-        button = "Open";
-        accent = true;
-        detail = $"{mode}  ·  connects when it next calls";
+        button = "Forget";
+        accent = false;
+        detail = $"{mode}  ·  back on a dongle; start it in dongle mode to use it here";
     }
 
     // A gamepad open here gets a mode picker
@@ -215,11 +216,9 @@ void DrawCard(PadEntry e)
         hub!.SetMode(e.Pad.Id, modeFormats[m]);
     if (clicked)
     {
-        if (e.Away)
-            hub!.Forget(e.Pad.Id);
-        else if (here)
+        if (here)
             hub!.Close(e.Pad.Id);
         else
-            hub!.Allow(e.Pad.Id);
+            hub!.Forget(e.Pad.Id);
     }
 }

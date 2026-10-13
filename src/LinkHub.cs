@@ -1,9 +1,9 @@
 // The gamepads in Link mode on this PC: each one's Link HID collection (HidLink.cs), opened as it
-// appears. Windows keeps a paired gamepad's collection present while the gamepad is away, so what
-// says a gamepad is here is its reports: the host info goes to every one each second (the gamepad
-// waits for it, and treats three silent seconds as the app gone), and one that stops reporting is
-// away until it reports again. A gamepad disconnected here gets no host info: within a few seconds
-// it goes back to looking for a dongle.
+// appears. What says a gamepad is here is its reports: the host info goes to every one each second
+// (the gamepad waits for it, and treats three silent seconds as the app gone), and one that stops
+// reporting is away until it reports again. A gamepad disconnected here gets no host info until it
+// has gone quiet (it went back to looking for a dongle); after that it is welcome again, when it is
+// next started in dongle mode.
 
 using HIDMaestro;
 
@@ -73,6 +73,8 @@ sealed class LinkHub : IDisposable
                             Guard(s, s.Heartbeat);
                     nextBeat = now + HeartbeatMs;
                 }
+                // Released: once a gamepad disconnected here has gone quiet, it may come back
+                _refused.RemoveWhere(id => _sessions.TryGetValue(id, out var r) && r.SilentMs > AwayAfterMs);
                 foreach (var s in _sessions.Values)
                 {
                     Guard(s, s.Tick);
@@ -159,13 +161,6 @@ sealed class LinkHub : IDisposable
             if (_sessions.TryGetValue(id, out var session))
                 session.Close("Closed", CloseReason.Closed);
         }
-    }
-
-    // Let a gamepad disconnected here connect again: it does when it next calls this PC
-    public void Allow(string id)
-    {
-        lock (_lock)
-            _refused.Remove(id);
     }
 
     // Drop a gamepad that went away from the list

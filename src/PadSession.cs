@@ -134,16 +134,13 @@ sealed class PadSession
 
     void SendHost() => Send(Protocol.LaneMessage, Protocol.Host(_wantedFormat, Updates.CurrentNumber, _rateHz));
 
-    // A disconnected gamepad's writes fail: its silence says it is away, not this
-    void Send(byte lane, ReadOnlySpan<byte> payload)
-    {
-        if (Reason != CloseReason.Closed)
-            _link?.Send(lane, payload);
-    }
+    // A disconnected gamepad's writes fail: its silence says it is away, not this. The hub stops the
+    // host info to a gamepad disconnected here.
+    void Send(byte lane, ReadOnlySpan<byte> payload) => _link?.Send(lane, payload);
 
     public void OnReport(byte[] report, long arrivalUs)
     {
-        if (Reason == CloseReason.Closed || report.Length < 3)
+        if (report.Length < 3)
             return;
         _lastReportMs = Environment.TickCount64;
         switch (report[0])
@@ -174,9 +171,9 @@ sealed class PadSession
                 Fail("Can't open", "The gamepad's firmware speaks another link version");
                 return;
             }
-            if (State == SessionState.Closed && Reason == CloseReason.WentAway)
+            if (State == SessionState.Closed)
             {
-                // Back: open it again
+                // Back (it went away, or was released and started again): open it again
                 State = SessionState.Opening;
                 Reason = CloseReason.None;
                 Problem = null;
