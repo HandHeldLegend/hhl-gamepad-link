@@ -6,21 +6,25 @@ namespace HhlGamepadLink;
 
 static class Settings
 {
-    static readonly string Folder =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad Link");
+    // The app's own folder: these settings, the known gamepads and the log
+    public static readonly string Folder = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad Link");
+
     static readonly string FilePath = Path.Combine(Folder, "settings.ini");
 
     // Where the app kept them up to 0.1, as HHL Gamepad WLAN: read when there are none here yet
     static readonly string OldFilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad WLAN", "settings.ini");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad WLAN",
+        "settings.ini");
 
     public static bool CloseToTray { get; private set; }
 
     public static void Load()
     {
+        string path = File.Exists(FilePath) || !File.Exists(OldFilePath) ? FilePath : OldFilePath;
         try
         {
-            foreach (var line in File.ReadAllLines(File.Exists(FilePath) || !File.Exists(OldFilePath) ? FilePath : OldFilePath))
+            foreach (var line in File.ReadAllLines(path))
             {
                 var parts = line.Split('=', 2, StringSplitOptions.TrimEntries);
                 if (parts.Length == 2 && parts[0] == "closeToTray")

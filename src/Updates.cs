@@ -11,7 +11,7 @@ namespace HhlGamepadLink;
 static class Updates
 {
     const string Repo = "HandHeldLegend/hhl-gamepad-link";
-    public const string ReleasesPage = $"https://github.com/{Repo}/releases/latest";
+    const string ReleasesPage = $"https://github.com/{Repo}/releases/latest";
     static readonly TimeSpan CheckEvery = TimeSpan.FromHours(6);
 
     public enum State { Unknown, UpToDate, Available }
@@ -21,8 +21,8 @@ static class Updates
 
     // This build's version, from the project's <Version>
     public static string Current { get; } =
-        typeof(Updates).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-            .Split('+')[0] ?? "0.0.0";
+        typeof(Updates).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion.Split('+')[0] ?? "0.0.0";
 
     public static void Start(CancellationToken stop) => _ = Task.Run(async () =>
     {
@@ -57,7 +57,11 @@ static class Updates
     {
         get
         {
-            var p = Current.Split('.').Select(x => uint.TryParse(x, out uint n) ? n : 0).Concat(new uint[3]).Take(3).ToArray();
+            var p = Current.Split('.')
+                .Select(x => uint.TryParse(x, out uint n) ? n : 0)
+                .Concat(new uint[3])
+                .Take(3)
+                .ToArray();
             return (p[0] << 16) | (p[1] << 8) | p[2];
         }
     }

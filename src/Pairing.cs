@@ -5,6 +5,7 @@
 // Failing that, the app pairs it as Windows' Add device would: pages it (it is findable too).
 // Windows' own Bluetooth API (bthprops), user mode.
 
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -12,25 +13,30 @@ namespace HhlGamepadLink;
 
 static unsafe partial class Pairing
 {
-    // Whether Windows holds a pairing for this address (as shown). Removed in Settings, it doesn't, and
-    // the gamepad can't connect to this PC however it is called.
-    public static bool IsPaired(string address)
-    {
-        var info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = Convert.ToUInt64(address, 16) };
-        return BluetoothGetDeviceInfo(0, ref info) == 0 && info.fAuthenticated != 0;
-    }
+    const uint MitmNotRequiredGeneralBonding = 4, ServiceEnable = 1;
+    const int DirectTries = 4;       // Pages to its address before searching for it
+    const int PagedSeconds = 20;     // The gamepad's radio restarts, then pages up to 3 x 5.12 s
+    const int SlowPairMs = 3000;     // Pairing on its link that takes longer than this: say so
+    const int LinkPollMs = 100;
+    const int RetryMs = 1000;
+    const byte InquiryUnits = 4;     // 4 x 1.28 s a round
+    static readonly Guid HidService = new("00001124-0000-1000-8000-00805f9b34fb");
 
-    // Pair the gamepad at this address (as shown, "6AF4B0E017F2"): `ask` asks it to pair with this PC
-    // (null when it took that), then it pages here. `progress` hears each step, for the card. Returns
-    // null when paired and its HID service is on, else what went wrong.
-    public static string? PairAsked(string address, Func<string?> ask, int seconds, CancellationToken cancel,
-                                    Action<string> progress)
+    // Whether Windows holds a pairing for this address (as shown). Removed in Settings, it doesn't,
+    // and the gamepad can't connect to this PC however it is called.
+    public static bool IsPaired(string address) => IsPaired(Convert.ToUInt64(address, 16));
+
+    // Pair the gamepad at this address (as shown, "6AF4B0E017F2"): `ask` asks it to pair with this
+    // PC (null when it took that), then it pages here; failing that, it is paged for up to
+    // `seconds`. `progress` hears each step, for the card. Returns null when paired and its HID
+    // service is on, else what went wrong.
+    public static string? PairAsked(string address, Func<string?> ask, int seconds, Action<string> progress)
     {
         ulong addr = Convert.ToUInt64(address, 16);
         Forget(addr);
 
-        var t = System.Diagnostics.Stopwatch.StartNew();
-        var info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
+        var sinceAsked = Stopwatch.StartNew();
+        var info = NewInfo(addr);
         uint r = BluetoothRegisterForAuthenticationEx(ref info, out nint registration, &OnAuthentication, 0);
         if (r != 0)
             return $"Couldn't take the pairing request (error {r})";
@@ -41,9 +47,10 @@ static unsafe partial class Pairing
             if (error != null)
                 return error;
             progress("Pairing 2/4: it's calling this PC…");
-            if (WaitForLink(addr, cancel, out var link))
+            if (WaitForLink(addr, out var link))
             {
-                Log.Write($"Pairing {address}: its link is up, {t.ElapsedMilliseconds} ms after asking");
+                long ms = sinceAsked.ElapsedMilliseconds;
+                Log.Write($"Pairing {address}: its link is up, {ms} ms after asking");
                 r = PairOnLink(ref link, progress);
                 if (r != 0)
                     Log.Write($"Pairing {address}: pairing on its link failed (error {r})");
@@ -53,27 +60,35 @@ static unsafe partial class Pairing
         {
             BluetoothUnregisterAuthentication(registration);
         }
-        if (!IsPaired(address))
+        if (!IsPaired(addr))
         {
             Log.Write($"Pairing {address}: not paired on its own link, paging it");
             progress("Pairing: looking for it…");
-            return Pair(address, seconds, cancel);
+            return Pair(addr, seconds);
         }
-        Log.Write($"Pairing {address}: paired, {t.ElapsedMilliseconds} ms after asking");
+        Log.Write($"Pairing {address}: paired, {sinceAsked.ElapsedMilliseconds} ms after asking");
         progress("Pairing 4/4: paired, setting it up on Windows…");
         return EnableHid(addr);
     }
 
+    static DeviceInfo NewInfo(ulong addr) => new() { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
+
+    static bool IsPaired(ulong addr)
+    {
+        var info = NewInfo(addr);
+        return BluetoothGetDeviceInfo(0, ref info) == 0 && info.fAuthenticated != 0;
+    }
+
     // The gamepad's page to this PC: its link up within PagedSeconds
-    static bool WaitForLink(ulong addr, CancellationToken cancel, out DeviceInfo link)
+    static bool WaitForLink(ulong addr, out DeviceInfo link)
     {
         var until = DateTime.UtcNow.AddSeconds(PagedSeconds);
-        while (DateTime.UtcNow < until && !cancel.IsCancellationRequested)
+        while (DateTime.UtcNow < until)
         {
-            link = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
+            link = NewInfo(addr);
             if (BluetoothGetDeviceInfo(0, ref link) == 0 && link.fConnected != 0)
                 return true;
-            Thread.Sleep(100);
+            Thread.Sleep(LinkPollMs);
         }
         link = default;
         return false;
@@ -89,16 +104,15 @@ static unsafe partial class Pairing
             if (waiting)
                 progress("Pairing 3/4: connected, pairing (taking longer than usual)…");
         }, null, SlowPairMs, Timeout.Infinite);
-        uint r = BluetoothAuthenticateDeviceEx(0, 0, ref link, 0, MitmNotRequiredGeneralBonding);
+        uint r = Authenticate(ref link);
         waiting = false;
         return r;
     }
 
-    // Pair the device at this address (as shown), paging it for up to `seconds`. Returns null when
-    // paired and its HID service is on, else what went wrong.
-    public static string? Pair(string address, int seconds, CancellationToken cancel)
+    // Pair the device at this address, paging it for up to `seconds`. Returns null when paired and
+    // its HID service is on, else what went wrong.
+    static string? Pair(ulong addr, int seconds)
     {
-        ulong addr = Convert.ToUInt64(address, 16);
         Forget(addr);
 
         // The address is known, so Windows pages it straight away rather than searching (an inquiry
@@ -109,12 +123,12 @@ static unsafe partial class Pairing
         for (int attempt = 0; ; attempt++)
         {
             int left = (int)(until - DateTime.UtcNow).TotalSeconds;
-            if (left <= 0 || cancel.IsCancellationRequested)
+            if (left <= 0)
                 return r == 0 ? "It didn't show up to pair" : $"Pairing failed (error {r})";
             DeviceInfo info;
             if (attempt < DirectTries)
-                info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
-            else if (!Find(addr, left, cancel, out info))
+                info = NewInfo(addr);
+            else if (!Find(addr, left, out info))
                 return "It didn't show up to pair";
 
             r = BluetoothRegisterForAuthenticationEx(ref info, out nint registration, &OnAuthentication, 0);
@@ -122,7 +136,7 @@ static unsafe partial class Pairing
                 return $"Couldn't take the pairing request (error {r})";
             try
             {
-                r = BluetoothAuthenticateDeviceEx(0, 0, ref info, 0, MitmNotRequiredGeneralBonding);
+                r = Authenticate(ref info);
             }
             finally
             {
@@ -130,22 +144,24 @@ static unsafe partial class Pairing
             }
             if (r == 0)
                 return EnableHid(addr);
-            Thread.Sleep(1000);
+            Thread.Sleep(RetryMs);
         }
     }
+
+    static uint Authenticate(ref DeviceInfo info) =>
+        BluetoothAuthenticateDeviceEx(0, 0, ref info, 0, MitmNotRequiredGeneralBonding);
 
     // A pairing left from before (the gamepad forgot it, or a new descriptor) can't be reused
     static void Forget(ulong addr)
     {
-        var info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
-        if (BluetoothGetDeviceInfo(0, ref info) == 0 && info.fAuthenticated != 0)
+        if (IsPaired(addr))
             BluetoothRemoveDevice(&addr);
     }
 
     // Paired: its HID service on, which makes Windows connect to it
     static string? EnableHid(ulong addr)
     {
-        var info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo), Address = addr };
+        var info = NewInfo(addr);
         uint r = BluetoothGetDeviceInfo(0, ref info);
         if (r == 0)
         {
@@ -155,18 +171,18 @@ static unsafe partial class Pairing
         return r == 0 ? null : $"Paired, but its HID service didn't turn on (error {r})";
     }
 
-    // Inquiry rounds (about 5 s each) until the device answers
-    static bool Find(ulong addr, int seconds, CancellationToken cancel, out DeviceInfo found)
+    // Inquiry rounds until the device answers
+    static bool Find(ulong addr, int seconds, out DeviceInfo found)
     {
         found = default;
         var until = DateTime.UtcNow.AddSeconds(seconds);
-        while (DateTime.UtcNow < until && !cancel.IsCancellationRequested)
+        while (DateTime.UtcNow < until)
         {
             var search = new SearchParams
             {
                 dwSize = (uint)sizeof(SearchParams),
                 fReturnAuthenticated = 1, fReturnRemembered = 1, fReturnUnknown = 1, fReturnConnected = 1,
-                fIssueInquiry = 1, cTimeoutMultiplier = 4, // 4 x 1.28 s
+                fIssueInquiry = 1, cTimeoutMultiplier = InquiryUnits,
             };
             var info = new DeviceInfo { dwSize = (uint)sizeof(DeviceInfo) };
             nint h = BluetoothFindFirstDevice(ref search, ref info);
@@ -204,15 +220,10 @@ static unsafe partial class Pairing
         };
         *(uint*)response.value = p->numericValue;
         uint r = BluetoothSendAuthenticationResponseEx(0, &response);
-        Log.Write($"Pairing {p->deviceInfo.Address:X12}: request (method {p->authenticationMethod}, io {p->ioCapability}) accepted: {r}");
+        Log.Write($"Pairing {p->deviceInfo.Address:X12}: request (method {p->authenticationMethod}, " +
+                  $"io {p->ioCapability}) accepted: {r}");
         return 1;
     }
-
-    const uint MitmNotRequiredGeneralBonding = 4, ServiceEnable = 1;
-    const int DirectTries = 4;
-    const int PagedSeconds = 20; // The gamepad's radio restarts, then pages up to 3 x 5.12 s
-    const int SlowPairMs = 3000; // Pairing on its link that takes longer than this: say so
-    static readonly Guid HidService = new("00001124-0000-1000-8000-00805f9b34fb");
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct DeviceInfo
@@ -252,18 +263,37 @@ static unsafe partial class Pairing
         public byte negativeResponse;
     }
 
-    [LibraryImport("bthprops.cpl")] private static partial uint BluetoothGetDeviceInfo(nint radio, ref DeviceInfo info);
-    [LibraryImport("bthprops.cpl")] private static partial uint BluetoothRemoveDevice(ulong* address);
-    [LibraryImport("bthprops.cpl")] private static partial nint BluetoothFindFirstDevice(ref SearchParams p, ref DeviceInfo info);
-    [LibraryImport("bthprops.cpl")] private static partial int BluetoothFindNextDevice(nint find, ref DeviceInfo info);
-    [LibraryImport("bthprops.cpl")] private static partial int BluetoothFindDeviceClose(nint find);
     [LibraryImport("bthprops.cpl")]
-    private static partial uint BluetoothRegisterForAuthenticationEx(ref DeviceInfo info, out nint registration,
+    private static partial uint BluetoothGetDeviceInfo(nint radio, ref DeviceInfo info);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial uint BluetoothRemoveDevice(ulong* address);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial nint BluetoothFindFirstDevice(ref SearchParams p, ref DeviceInfo info);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial int BluetoothFindNextDevice(nint find, ref DeviceInfo info);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial int BluetoothFindDeviceClose(nint find);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial uint BluetoothRegisterForAuthenticationEx(
+        ref DeviceInfo info, out nint registration,
         delegate* unmanaged[Stdcall]<nint, AuthParams*, int> callback, nint context);
-    [LibraryImport("bthprops.cpl")] private static partial int BluetoothUnregisterAuthentication(nint registration);
-    [LibraryImport("bthprops.cpl")] private static partial uint BluetoothSendAuthenticationResponseEx(nint radio, AuthResponse* response);
+
     [LibraryImport("bthprops.cpl")]
-    private static partial uint BluetoothAuthenticateDeviceEx(nint parent, nint radio, ref DeviceInfo info, nint oob, uint requirements);
+    private static partial int BluetoothUnregisterAuthentication(nint registration);
+
     [LibraryImport("bthprops.cpl")]
-    private static partial uint BluetoothSetServiceState(nint radio, ref DeviceInfo info, ref Guid service, uint flags);
+    private static partial uint BluetoothSendAuthenticationResponseEx(nint radio, AuthResponse* response);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial uint BluetoothAuthenticateDeviceEx(nint parent, nint radio, ref DeviceInfo info,
+                                                              nint oob, uint requirements);
+
+    [LibraryImport("bthprops.cpl")]
+    private static partial uint BluetoothSetServiceState(nint radio, ref DeviceInfo info, ref Guid service,
+                                                         uint flags);
 }

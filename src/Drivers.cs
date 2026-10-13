@@ -3,8 +3,8 @@
 //
 //   The virtual controller driver (HIDMaestro): gamepads in SInput and XInput mode. The app installs
 //   it when it starts.
-//   The USB/IP transport (usbip-win2): the GameCube adapter for gamepads in Slippi mode. Installed
-//   the first time one opens (GcAdapter), or here.
+//   The USB/IP transport (usbip-win2): XInput mode's Xbox 360 controller and Slippi mode's GameCube
+//   adapter. Installed the first time a gamepad opens in either (PadSession, GcAdapter), or here.
 //
 // Removing either first closes every gamepad open here, since their devices go with it.
 
@@ -19,7 +19,13 @@ sealed class Drivers
     public enum Which { Controller = 0, UsbIp = 1 }
 
     // usbip-win2's installer registers its uninstaller here
-    const string UsbIpUninstallKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{199505b0-b93d-4521-a8c7-897818e0205a}_is1";
+    const string UsbIpUninstallKey =
+        @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{199505b0-b93d-4521-a8c7-897818e0205a}_is1";
+
+    const string InstallingUsbIp =
+        "Installing the USB/IP transport. USB devices disconnect for a moment…";
+
+    static readonly TimeSpan UninstallWait = TimeSpan.FromMinutes(5);
 
     // One install or removal at a time, here or from the GameCube adapter
     static readonly object _installLock = new();
@@ -47,20 +53,22 @@ sealed class Drivers
         new NativeUi.DriverRow("Virtual controller driver",
             "HIDMaestro. Makes gamepads in SInput mode controllers on this PC. HHL Gamepad Link " +
             "installs it each time it starts.",
-            State(Which.Controller), _installed[0], _busy == Which.Controller,
+            State(Which.Controller), IsInstalled(Which.Controller), _busy == Which.Controller,
             "Every gamepad open here closes, and the driver and its certificate leave this PC. Other apps " +
             "that use HIDMaestro lose their controllers and the driver too."),
         new NativeUi.DriverRow("USB/IP transport",
             "usbip-win2. Carries the Xbox 360 controller of XInput mode and the GameCube adapter of Slippi " +
             "mode. Installed the first time a gamepad opens in either. USB devices disconnect for a moment " +
             "while it installs.",
-            State(Which.UsbIp), _installed[1], _busy == Which.UsbIp,
+            State(Which.UsbIp), IsInstalled(Which.UsbIp), _busy == Which.UsbIp,
             "Every gamepad open here closes. Other programs that use usbip-win2 lose it too."),
     };
 
+    bool IsInstalled(Which which) => _installed[(int)which];
+
     string State(Which which) => _busy == which
-        ? (_installed[(int)which] ? "Removing…" : "Installing…")
-        : _installed[(int)which] ? "Installed" : "Not installed";
+        ? (IsInstalled(which) ? "Removing…" : "Installing…")
+        : IsInstalled(which) ? "Installed" : "Not installed";
 
     // Look again, in the background: the window calls it when it opens
     public void Refresh()
@@ -72,8 +80,15 @@ sealed class Drivers
 
     void Check()
     {
-        try { _installed[0] = _ctx.IsDriverInstalled; } catch { _installed[0] = false; }
-        try { _installed[1] = HMContext.IsUsbipBackendAvailable; } catch { _installed[1] = false; }
+        _installed[(int)Which.Controller] = Probe(() => _ctx.IsDriverInstalled);
+        _installed[(int)Which.UsbIp] = Probe(() => HMContext.IsUsbipBackendAvailable);
+    }
+
+    // A check that fails reads as not installed
+    static bool Probe(Func<bool> installed)
+    {
+        try { return installed(); }
+        catch { return false; }
     }
 
     public void Act(Which which, bool remove)
@@ -103,8 +118,10 @@ sealed class Drivers
                         Run("Removing the USB/IP transport…", RemoveUsbIp);
                         break;
                 }
-                Note = $"{(which == Which.Controller ? "The virtual controller driver" : "The USB/IP transport")} " +
-                       $"{(remove ? "is removed" : "is installed")}.";
+                string driver = which == Which.Controller
+                    ? "The virtual controller driver"
+                    : "The USB/IP transport";
+                Note = $"{driver} {(remove ? "is removed" : "is installed")}.";
             }
             catch (Exception e)
             {
@@ -115,13 +132,10 @@ sealed class Drivers
                 Check();
                 _busy = null;
             }
-            if (which == Which.Controller && !remove && _installed[0])
+            if (which == Which.Controller && !remove && IsInstalled(Which.Controller))
                 ControllerDriverInstalled?.Invoke();
         });
     }
-
-    const string InstallingUsbIp =
-        "Installing the USB/IP transport for the GameCube adapter. USB devices disconnect for a moment…";
 
     // The GameCube adapter's first use on this PC
     public static void EnsureUsbIp()
@@ -154,7 +168,7 @@ sealed class Drivers
             UseShellExecute = false,
             CreateNoWindow = true,
         }) ?? throw new InvalidOperationException("the uninstaller didn't start");
-        if (!p.WaitForExit(TimeSpan.FromMinutes(5)))
+        if (!p.WaitForExit(UninstallWait))
             throw new InvalidOperationException("the uninstaller didn't finish");
     }
 }

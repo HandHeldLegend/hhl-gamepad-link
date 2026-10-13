@@ -9,18 +9,17 @@ using HIDMaestro;
 
 namespace HhlGamepadLink;
 
-// A gamepad as the list shows it. Away: it was here and has gone quiet. Refused: disconnected here.
-// Nearby: not here, but advertising (connected elsewhere). Known: it gave this app its call token,
-// so it can be called over; otherwise it can be paired. Call says how the last call or pairing went.
-sealed record PadEntry(PadIdentity Pad, PadSession? Session, bool Away, bool Refused, Caller.Sighting? Nearby,
-                       string? Call, bool Known = true, string UserName = "");
-
 sealed class LinkHub : IDisposable
 {
     const long HeartbeatMs = 1000;
-    const long AwayAfterMs = 2000; // No report this long: the gamepad is away (the link reports far faster)
+    const long AwayAfterMs = 2000;  // No report this long: the gamepad is away (the link reports far faster)
+    const long ScanEveryMs = 2000;
+    const int LoopSleepMs = 5;
+    const int PairSeconds = 45;     // Paging a gamepad that didn't pair on its own link
 
-    static readonly TimeSpan NearbyFor = TimeSpan.FromSeconds(90); // Advertising every 1 s, but a busy radio scans poorly (10-45 s between sightings measured)
+    // Advertising every 1 s, but a busy radio scans poorly: 10-45 s between sightings measured
+    static readonly TimeSpan NearbyFor = TimeSpan.FromSeconds(90);
+    static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(30);
 
     readonly HMContext _ctx;
     readonly GcAdapter _adapter;
@@ -31,12 +30,10 @@ sealed class LinkHub : IDisposable
     readonly object _lock = new();
     readonly Dictionary<string, LinkDevice> _devices = new();   // Open collections, by path
     readonly Dictionary<string, PadSession> _sessions = new();  // By gamepad (Link address)
-    readonly HashSet<string> _refused = new();
+    readonly HashSet<string> _refused = new();                  // Disconnected here, until they go quiet
     readonly Dictionary<string, byte> _modes = new();           // Picked here this run, by gamepad
-    HashSet<string> _windowsPaired = new();                     // Known gamepads Windows holds a Link pairing for
     readonly HashSet<string> _pairing = new();                  // Being paired now
-
-    public int RateHz { get; private set; }
+    HashSet<string> _windowsPaired = new();                     // Known gamepads Windows holds a pairing for
 
     public LinkHub(HMContext ctx, int rateHz)
     {
@@ -47,37 +44,21 @@ sealed class LinkHub : IDisposable
         _thread.Start();
     }
 
+    public int RateHz { get; private set; }
+
     public IReadOnlyList<PadEntry> Snapshot()
     {
         lock (_lock)
         {
-            var entries = _sessions.Values
-                .Where(s => s.Pad != null)
-                .Select(s =>
-                {
-                    bool here = s.State != SessionState.Closed;
-                    return new PadEntry(s.Pad!, s, s.State == SessionState.Closed && s.Reason == CloseReason.WentAway,
-                                        _refused.Contains(s.Id), here ? null : _caller.Seen(s.Id, NearbyFor),
-                                        _caller.CallStatus(s.Id));
-                })
-                .ToList();
-            entries = entries.Select(e => KnownPads.Get(e.Pad.Id) is KnownPads.Pad k
-                                          ? e with { UserName = k.UserName, Known = _windowsPaired.Contains(k.Id) }
-                                          : e with { Known = false }).ToList();
+            var entries = _sessions.Values.Where(s => s.Pad != null).Select(SessionEntry).ToList();
             // Gamepads advertising nearby that aren't here this run: linked here before (call them
             // over), or not (pair them)
             foreach (var (id, seen) in _caller.Nearby(NearbyFor))
-            {
-                if (_sessions.ContainsKey(id))
-                    continue;
-                var known = KnownPads.Get(id);
-                string name = seen.Name.Length > 0 ? seen.Name : known?.Name ?? "HOJA gamepad";
-                var pad = new PadIdentity(id, name, "", 0, 0, seen.Format, 0, false);
-                entries.Add(new PadEntry(pad, null, false, false, seen, _caller.CallStatus(id),
-                                         known != null && _windowsPaired.Contains(id),
-                                         seen.UserName.Length > 0 ? seen.UserName : known?.UserName ?? ""));
-            }
-            return entries.OrderBy(e => e.UserName.Length > 0 ? e.UserName : e.Pad.Title).ThenBy(e => e.Pad.Id).ToList();
+                if (!_sessions.ContainsKey(id))
+                    entries.Add(NearbyEntry(id, seen));
+            return entries.OrderBy(e => e.UserName.Length > 0 ? e.UserName : e.Pad.Name)
+                          .ThenBy(e => e.Pad.Id)
+                          .ToList();
         }
     }
 
@@ -91,9 +72,8 @@ sealed class LinkHub : IDisposable
         _caller.SetStatus(id, "Pairing…");
         _ = Task.Run(() =>
         {
-            using var cancel = new CancellationTokenSource();
-            string? error = Pairing.PairAsked(id, () => _caller.AskToPairAsync(id).GetAwaiter().GetResult(), 45, cancel.Token,
-                                              step => _caller.SetStatus(id, step));
+            string? error = Pairing.PairAsked(id, () => _caller.AskToPairAsync(id).GetAwaiter().GetResult(),
+                                              PairSeconds, step => _caller.SetStatus(id, step));
             _caller.SetStatus(id, error ?? "Paired: connecting…");
             if (error != null)
                 Log.Write($"Pairing {id}: {error}");
@@ -115,110 +95,6 @@ sealed class LinkHub : IDisposable
             lock (_lock)
                 _refused.Remove(id);
             _caller.Call(id, known.Token);
-        }
-    }
-
-    void Run()
-    {
-        long nextScan = 0, nextBeat = 0;
-        while (_running)
-        {
-            long now = Environment.TickCount64;
-            if (now >= nextScan)
-            {
-                try { Scan(); }
-                catch (Exception e) { Log.Write($"Link scan: {e}"); }
-                // A pairing removed in Windows' settings: the gamepad needs pairing again, not a call
-                var paired = KnownPads.All().Where(k => Pairing.IsPaired(k.Id)).Select(k => k.Id).ToHashSet();
-                lock (_lock)
-                    _windowsPaired = paired;
-                nextScan = now + 2000;
-            }
-            lock (_lock)
-            {
-                if (now >= nextBeat)
-                {
-                    foreach (var s in _sessions.Values)
-                        if (!_refused.Contains(s.Id))
-                            Guard(s, s.Heartbeat);
-                    nextBeat = now + HeartbeatMs;
-                }
-                // Released: once a gamepad disconnected here has gone quiet, it may come back
-                _refused.RemoveWhere(id => _sessions.TryGetValue(id, out var r) && r.SilentMs > AwayAfterMs);
-                foreach (var s in _sessions.Values)
-                {
-                    Guard(s, s.Tick);
-                    if (s.State != SessionState.Closed && s.SilentMs > AwayAfterMs && s.Pad != null)
-                        s.Close("Gamepad went away", CloseReason.WentAway);
-                }
-                _adapter.Tick();
-            }
-            Thread.Sleep(5);
-        }
-    }
-
-    // New Link collections: open each and give it a session; gone ones close
-    void Scan()
-    {
-        var present = LinkDevice.FindPaths();
-        lock (_lock)
-        {
-            foreach (var path in _devices.Keys.Except(present).ToList())
-            {
-                _devices.Remove(path, out var gone);
-                gone!.Dispose();
-            }
-        }
-        foreach (var path in present)
-        {
-            lock (_lock)
-                if (_devices.ContainsKey(path))
-                    continue;
-            var device = LinkDevice.Open(path);
-            if (device == null)
-                continue;
-            lock (_lock)
-            {
-                _devices[path] = device;
-                if (!_sessions.TryGetValue(device.Id, out var session))
-                {
-                    session = new PadSession(_ctx, _adapter, device.Id, RateHz);
-                    if (_modes.TryGetValue(device.Id, out byte format))
-                        session.SetMode(format);
-                    _sessions[device.Id] = session;
-                }
-                Guard(session, () => session.Attach(device));
-            }
-            new Thread(() => ReadLoop(device)) { IsBackground = true, Priority = ThreadPriority.AboveNormal,
-                                                 Name = $"Link {device.Id}" }.Start();
-        }
-    }
-
-    // One gamepad's fault closes that gamepad, not the app
-    static void Guard(PadSession session, Action work)
-    {
-        try { work(); }
-        catch (Exception e)
-        {
-            Log.Write($"{session.Id}: {e}");
-            session.Close($"Error: {e.Message}", CloseReason.Closed);
-        }
-    }
-
-    void ReadLoop(LinkDevice device)
-    {
-        while (_running && !device.Closed)
-        {
-            var report = device.Read();
-            if (report == null)
-                break;
-            long arrivalUs = PeriodicClock.NowUs;
-            lock (_lock)
-            {
-                if (!_sessions.TryGetValue(device.Id, out var session) || _refused.Contains(device.Id))
-                    continue;
-                Guard(session, () => session.OnReport(report, arrivalUs));
-            }
         }
     }
 
@@ -277,7 +153,7 @@ sealed class LinkHub : IDisposable
                 session.Close("Closed", CloseReason.Closed);
         }
         foreach (var session in sessions)
-            session.WaitForDevices(TimeSpan.FromSeconds(30));
+            session.WaitForDevices(CloseWait);
         _adapter.RemoveNow();
     }
 
@@ -294,5 +170,146 @@ sealed class LinkHub : IDisposable
         }
         _caller.Dispose();
         _adapter.Dispose();
+    }
+
+    // A gamepad that has been here this run
+    PadEntry SessionEntry(PadSession s)
+    {
+        bool here = s.State != SessionState.Closed;
+        var known = KnownPads.Get(s.Id);
+        return new PadEntry(s.Pad!, s, !here && s.Reason == CloseReason.WentAway, _refused.Contains(s.Id),
+                            here ? null : _caller.Seen(s.Id, NearbyFor), _caller.CallStatus(s.Id),
+                            known != null && _windowsPaired.Contains(s.Id), known?.UserName ?? "");
+    }
+
+    PadEntry NearbyEntry(string id, Caller.Sighting seen)
+    {
+        var known = KnownPads.Get(id);
+        string name = seen.Name.Length > 0 ? seen.Name : known?.Name ?? "HOJA gamepad";
+        string userName = seen.UserName.Length > 0 ? seen.UserName : known?.UserName ?? "";
+        var pad = new PadIdentity(id, name, 0, 0, seen.Format);
+        return new PadEntry(pad, null, false, false, seen, _caller.CallStatus(id),
+                            known != null && _windowsPaired.Contains(id), userName);
+    }
+
+    void Run()
+    {
+        long nextScanMs = 0, nextBeatMs = 0;
+        while (_running)
+        {
+            long nowMs = Environment.TickCount64;
+            if (nowMs >= nextScanMs)
+            {
+                try { Scan(); }
+                catch (Exception e) { Log.Write($"Link scan: {e}"); }
+                RefreshWindowsPaired();
+                nextScanMs = nowMs + ScanEveryMs;
+            }
+            lock (_lock)
+            {
+                if (nowMs >= nextBeatMs)
+                {
+                    foreach (var s in _sessions.Values)
+                        if (!_refused.Contains(s.Id))
+                            Guard(s, s.Heartbeat);
+                    nextBeatMs = nowMs + HeartbeatMs;
+                }
+                TickSessions();
+                _adapter.Tick();
+            }
+            Thread.Sleep(LoopSleepMs);
+        }
+    }
+
+    // A pairing removed in Windows' settings: the gamepad needs pairing again, not a call
+    void RefreshWindowsPaired()
+    {
+        var paired = KnownPads.All().Where(k => Pairing.IsPaired(k.Id)).Select(k => k.Id).ToHashSet();
+        lock (_lock)
+            _windowsPaired = paired;
+    }
+
+    // Under _lock: releases quiet refused gamepads, and closes ones gone away
+    void TickSessions()
+    {
+        // Released: once a gamepad disconnected here has gone quiet, it may come back
+        _refused.RemoveWhere(id => _sessions.TryGetValue(id, out var r) && r.SilentMs > AwayAfterMs);
+        foreach (var s in _sessions.Values)
+        {
+            Guard(s, s.Tick);
+            if (s.State != SessionState.Closed && s.SilentMs > AwayAfterMs && s.Pad != null)
+                s.Close("Gamepad went away", CloseReason.WentAway);
+        }
+    }
+
+    // New Link collections: open each and give it a session; gone ones close
+    void Scan()
+    {
+        var present = LinkDevice.FindPaths();
+        lock (_lock)
+        {
+            foreach (var path in _devices.Keys.Except(present).ToList())
+            {
+                _devices.Remove(path, out var gone);
+                gone!.Dispose();
+            }
+        }
+        foreach (var path in present)
+        {
+            lock (_lock)
+                if (_devices.ContainsKey(path))
+                    continue;
+            var device = LinkDevice.Open(path);
+            if (device == null)
+                continue;
+            lock (_lock)
+                Adopt(device);
+            new Thread(() => ReadLoop(device))
+            {
+                IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = $"Link {device.Id}",
+            }.Start();
+        }
+    }
+
+    // Under _lock: a newly opened collection joins its gamepad's session, made for it the first time
+    void Adopt(LinkDevice device)
+    {
+        _devices[device.Path] = device;
+        if (!_sessions.TryGetValue(device.Id, out var session))
+        {
+            session = new PadSession(_ctx, _adapter, device.Id, RateHz);
+            if (_modes.TryGetValue(device.Id, out byte format))
+                session.SetMode(format);
+            _sessions[device.Id] = session;
+        }
+        Guard(session, () => session.Attach(device));
+    }
+
+    void ReadLoop(LinkDevice device)
+    {
+        while (_running && !device.Closed)
+        {
+            var report = device.Read();
+            if (report == null)
+                break;
+            long arrivalUs = PeriodicClock.NowUs;
+            lock (_lock)
+            {
+                if (!_sessions.TryGetValue(device.Id, out var session) || _refused.Contains(device.Id))
+                    continue;
+                Guard(session, () => session.OnReport(report, arrivalUs));
+            }
+        }
+    }
+
+    // One gamepad's fault closes that gamepad, not the app
+    static void Guard(PadSession session, Action work)
+    {
+        try { work(); }
+        catch (Exception e)
+        {
+            Log.Write($"{session.Id}: {e}");
+            session.Close($"Error: {e.Message}", CloseReason.Closed);
+        }
     }
 }

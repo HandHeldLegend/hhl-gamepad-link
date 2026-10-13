@@ -14,6 +14,10 @@ static class Personas
         "10950681020922150026FF007508951D810285020923150026FF007508953F810285030924150026FF00750895" +
         "2F9102C0";
 
+    const byte ReportReply = 0x02, ReportCommand = 0x03;
+    const byte CommandFeatures = 0x02;
+    const int CommandBytes = 48;
+
     // The gamepad's own identity. SDL (Steam Input) tells the bus from the parent's compatible
     // IDs: a root device reads as an unknown bus and SDL's SInput driver passes it by. Presented
     // as Bluetooth, which SInput also runs over, it is picked up like a real wireless pad.
@@ -31,14 +35,17 @@ static class Personas
         .DescriptorHex(SInputDescriptor)
         .Build();
 
-    public static bool IsFeatureRequest(ReadOnlySpan<byte> r) => r.Length >= 2 && r[0] == 0x03 && r[1] == 0x02;
-    public static bool IsFeatureReply(ReadOnlySpan<byte> r) => r.Length >= 2 && r[0] == 0x02 && r[1] == 0x02;
+    public static bool IsFeatureRequest(ReadOnlySpan<byte> r) =>
+        r.Length >= 2 && r[0] == ReportCommand && r[1] == CommandFeatures;
+
+    public static bool IsFeatureReply(ReadOnlySpan<byte> r) =>
+        r.Length >= 2 && r[0] == ReportReply && r[1] == CommandFeatures;
 
     public static byte[] FeatureRequest()
     {
-        var r = new byte[48];
-        r[0] = 0x03; // SInput output report
-        r[1] = 0x02; // Request features
+        var r = new byte[CommandBytes];
+        r[0] = ReportCommand;
+        r[1] = CommandFeatures;
         return r;
     }
 }

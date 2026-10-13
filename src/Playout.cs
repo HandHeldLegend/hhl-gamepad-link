@@ -13,7 +13,9 @@ sealed class Playout<T>
 {
     const int Buckets = 20;            // 20 x 100 ms: the offset follows the last 2 s
     const long BucketUs = 100_000;
-    const long MinDelayUs = 500, MaxDelayUs = 20_000;
+    const long MinDelayUs = 500, MaxDelayUs = 20_000, StartDelayUs = 2_000;
+    const long GrowUs = 1_000, ShrinkUs = 250;   // Delay steps, once per AdaptWindowUs
+    const long AdaptWindowUs = 1_000_000;
     const double TooLate = 0.05, FewLate = 0.01; // Late share that grows / shrinks the delay
 
     readonly object _lock = new();
@@ -27,7 +29,7 @@ sealed class Playout<T>
     int _onTime, _late;
     long _windowStartUs;
 
-    public long DelayUs { get; private set; } = 2_000;
+    public long DelayUs { get; private set; } = StartDelayUs;
     public double LateShare { get; private set; }
 
     public void Add(long arrivalUs, long sentUs, T sample)
@@ -84,22 +86,23 @@ sealed class Playout<T>
         }
     }
 
-    void TrackOffset(long nowUs, long sample)
+    // `offsetAndTripUs`: arrival minus the gamepad's sample time
+    void TrackOffset(long nowUs, long offsetAndTripUs)
     {
         if (_bucket < 0)
         {
-            Array.Fill(_bucketMin, sample);
+            Array.Fill(_bucketMin, offsetAndTripUs);
             _bucket = 0;
             _bucketStartUs = nowUs;
         }
         else if (nowUs - _bucketStartUs >= BucketUs)
         {
             _bucket = (_bucket + 1) % Buckets;
-            _bucketMin[_bucket] = sample;
+            _bucketMin[_bucket] = offsetAndTripUs;
             _bucketStartUs = nowUs;
         }
-        else if (sample < _bucketMin[_bucket])
-            _bucketMin[_bucket] = sample;
+        else if (offsetAndTripUs < _bucketMin[_bucket])
+            _bucketMin[_bucket] = offsetAndTripUs;
 
         _offsetUs = _bucketMin.Min();
     }
@@ -108,15 +111,15 @@ sealed class Playout<T>
     {
         if (_windowStartUs == 0)
             _windowStartUs = nowUs;
-        if (nowUs - _windowStartUs < 1_000_000)
+        if (nowUs - _windowStartUs < AdaptWindowUs)
             return;
 
         int total = _onTime + _late;
         LateShare = total > 0 ? (double)_late / total : 0;
         if (LateShare > TooLate)
-            DelayUs = Math.Min(MaxDelayUs, DelayUs + 1_000);
+            DelayUs = Math.Min(MaxDelayUs, DelayUs + GrowUs);
         else if (LateShare < FewLate)
-            DelayUs = Math.Max(MinDelayUs, DelayUs - 250);
+            DelayUs = Math.Max(MinDelayUs, DelayUs - ShrinkUs);
 
         _onTime = _late = 0;
         _windowStartUs = nowUs;

@@ -28,21 +28,15 @@ sealed class GcAdapter : IDisposable
     const long QuietUnplugUs = 1_000_000;  // No input this long: no controller on the port
     const string ProfileId = "hhl-gamecube-adapter";
     const string Identity = "hhl-link-gamecube-adapter";
+    static readonly TimeSpan RemoveWait = TimeSpan.FromSeconds(30);
 
     public sealed class Port
     {
-        internal readonly Playout<byte[]> Samples = new();
         internal byte[] Current = Empty();
         internal byte Rumble;
         internal long LastInputUs = long.MinValue / 2; // When its newest input arrived
         internal readonly Action<byte[]> SendToGamepad;
         readonly GcAdapter _adapter;
-
-        public int Number { get; }  // 1 to 4, as Dolphin numbers them
-        public bool Ready => _adapter._device != null;
-        public bool Installing => _adapter._installing;
-        public string? Problem => _adapter._problem;
-        public Playout<byte[]> Playout => Samples;
 
         internal Port(GcAdapter adapter, int number, Action<byte[]> sendToGamepad)
         {
@@ -50,6 +44,12 @@ sealed class GcAdapter : IDisposable
             Number = number;
             SendToGamepad = sendToGamepad;
         }
+
+        public Playout<byte[]> Samples { get; } = new();
+        public int Number { get; }  // 1 to 4, as Dolphin numbers them
+        public bool Ready => _adapter._device != null;
+        public bool Installing => _adapter._installing;
+        public string? Problem => _adapter._problem;
 
         // A report from the gamepad: an adapter's input report with the gamepad on port 1
         public void Add(long arrivalUs, long sentUs, ReadOnlySpan<byte> report)
@@ -78,13 +78,6 @@ sealed class GcAdapter : IDisposable
 
     public GcAdapter(HMContext ctx) => _ctx = ctx;
 
-    // A port's controller at rest: its status, nothing pressed, sticks centred, triggers released
-    static byte[] Neutral(byte status) => new byte[] { status, 0, 0, 0x80, 0x80, 0x80, 0x80, 0, 0 };
-
-    // No controller. The input is a resting one, not zeros: Dolphin keeps reading a port during
-    // netplay, where it doesn't report the controller gone, and zeros are sticks held down-left
-    static byte[] Empty() => Neutral(StatusEmpty);
-
     // A port for this gamepad, or null when all four are taken
     public Port? Join(string padId, Action<byte[]> sendToGamepad)
     {
@@ -106,6 +99,39 @@ sealed class GcAdapter : IDisposable
         }
     }
 
+    // From the hub's thread: the adapter goes once it has been empty a while
+    public void Tick()
+    {
+        lock (_lock)
+        {
+            if (_emptySinceMs >= 0 && Environment.TickCount64 - _emptySinceMs >= KeepWhenEmptyMs)
+            {
+                _emptySinceMs = -1;
+                RemoveDevice();
+            }
+        }
+    }
+
+    public void Dispose() => RemoveNow();
+
+    // Remove the adapter and wait until it is gone: when the app closes, or a driver is removed
+    public void RemoveNow()
+    {
+        lock (_lock)
+            RemoveDevice();
+        WaitForDeviceWork();
+        lock (_lock)
+            RemoveDevice(); // One that finished being made while closing
+        WaitForDeviceWork();
+    }
+
+    // A port's controller at rest: its status, nothing pressed, sticks centred, triggers released
+    static byte[] Neutral(byte status) => new byte[] { status, 0, 0, 0x80, 0x80, 0x80, 0x80, 0, 0 };
+
+    // No controller. The input is a resting one, not zeros: Dolphin keeps reading a port during
+    // netplay, where it doesn't report the controller gone, and zeros are sticks held down-left
+    static byte[] Empty() => Neutral(StatusEmpty);
+
     void Leave(Port port)
     {
         lock (_lock)
@@ -119,20 +145,7 @@ sealed class GcAdapter : IDisposable
         }
     }
 
-    // Called from the session thread: the adapter goes once it has been empty a while
-    public void Tick()
-    {
-        lock (_lock)
-        {
-            if (_emptySinceMs >= 0 && Environment.TickCount64 - _emptySinceMs >= KeepWhenEmptyMs)
-            {
-                _emptySinceMs = -1;
-                RemoveDevice();
-            }
-        }
-    }
-
-    // ---- The device ----
+    // --- The device ---
 
     void CreateDevice()
     {
@@ -195,6 +208,14 @@ sealed class GcAdapter : IDisposable
         }
     }
 
+    void WaitForDeviceWork()
+    {
+        Task[] pending;
+        lock (_deviceWork)
+            pending = _deviceWork.ToArray();
+        Task.WaitAll(pending, RemoveWait);
+    }
+
     // Dolphin's output: 0x13 starts the adapter, 0x11 sets each port's rumble
     void OnOutput(HMController controller, HMOutputPacket packet)
     {
@@ -214,68 +235,53 @@ sealed class GcAdapter : IDisposable
         }
     }
 
-    // One report every millisecond, from each port's newest sample that is due, while this is the device
-    void StartClock(HMController device)
-    {
-        new Thread(() =>
+    // One report every millisecond, from each port's newest sample that is due, while this is the
+    // device
+    void StartClock(HMController device) =>
+        new Thread(() => RunClock(device))
         {
-            using var timer = new PeriodicClock(1);
-            var report = new byte[1 + PortCount * PortBytes];
-            report[0] = ReportInput;
-            long next = PeriodicClock.NowUs;
-            while (_device == device)
+            IsBackground = true, Priority = ThreadPriority.Highest, Name = "GameCube adapter",
+        }.Start();
+
+    void RunClock(HMController device)
+    {
+        using var timer = new PeriodicClock();
+        var report = new byte[1 + PortCount * PortBytes];
+        report[0] = ReportInput;
+        long nextUs = PeriodicClock.NowUs;
+        while (_device == device)
+        {
+            nextUs += ReportPeriodUs;
+            long nowUs = PeriodicClock.NowUs;
+            if (nextUs < nowUs)
+                nextUs = nowUs; // Behind (the PC was busy): carry on from now
+            timer.WaitUntilUs(nextUs);
+            nowUs = PeriodicClock.NowUs;
+
+            lock (_lock)
             {
-                next += ReportPeriodUs;
-                long now = PeriodicClock.NowUs;
-                if (next < now)
-                    next = now; // Behind (the PC was busy): carry on from now
-                timer.WaitUntilUs(next);
-                now = PeriodicClock.NowUs;
+                for (int i = 0; i < PortCount; i++)
+                    PortData(_ports[i], nowUs).CopyTo(report, 1 + i * PortBytes);
 
-                lock (_lock)
-                {
-                    for (int i = 0; i < PortCount; i++)
-                    {
-                        var port = _ports[i];
-                        if (port == null)
-                        {
-                            Empty().CopyTo(report, 1 + i * PortBytes);
-                            continue;
-                        }
-                        while (port.Samples.TryTakeDue(now, out var sample))
-                            port.Current = sample;
-                        long quiet = now - Volatile.Read(ref port.LastInputUs);
-                        var data = quiet >= QuietUnplugUs ? Empty()
-                                 : quiet >= QuietNeutralUs ? Neutral(port.Current[0])
-                                 : port.Current;
-                        data.CopyTo(report, 1 + i * PortBytes);
-                    }
-
-                    // Under the lock removal takes, so the device can't be disposed mid-submit: its
-                    // memory goes with it, and writing there ends the app
-                    if (_device != device)
-                        break;
-                    device.SubmitRawExtendedReport(report);
-                }
+                // Under the lock removal takes, so the device can't be disposed mid-submit: its
+                // memory goes with it, and writing there ends the app
+                if (_device != device)
+                    break;
+                device.SubmitRawExtendedReport(report);
             }
-        }) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "GameCube adapter" }.Start();
+        }
     }
 
-    public void Dispose() => RemoveNow();
-
-    // Remove the adapter and wait until it is gone: when the app closes, or a driver is removed
-    public void RemoveNow()
+    // A port's part of the report: its newest due sample, or at rest once its gamepad goes quiet
+    static byte[] PortData(Port? port, long nowUs)
     {
-        lock (_lock)
-            RemoveDevice();
-        Task[] pending;
-        lock (_deviceWork)
-            pending = _deviceWork.ToArray();
-        Task.WaitAll(pending, TimeSpan.FromSeconds(30));
-        lock (_lock)
-            RemoveDevice(); // One that finished being made while closing
-        lock (_deviceWork)
-            pending = _deviceWork.ToArray();
-        Task.WaitAll(pending, TimeSpan.FromSeconds(30));
+        if (port == null)
+            return Empty();
+        while (port.Samples.TryTakeDue(nowUs, out var sample))
+            port.Current = sample;
+        long quietUs = nowUs - Volatile.Read(ref port.LastInputUs);
+        return quietUs >= QuietUnplugUs ? Empty()
+             : quietUs >= QuietNeutralUs ? Neutral(port.Current[0])
+             : port.Current;
     }
 }

@@ -5,6 +5,9 @@
 using HIDMaestro;
 using HhlGamepadLink;
 
+const string AppName = "HHL Gamepad Link";
+const int WindowWidth = 620, WindowHeight = 480;
+
 int[] rates = { 125, 250, 500 };
 string[] rateLabels = rates.Select(r => $"{r} Hz").ToArray();
 int rateIndex = 1; // 250 Hz each run: nothing is saved
@@ -14,8 +17,8 @@ byte[] modeFormats = { Protocol.FormatSInput, Protocol.FormatXInput, Protocol.Fo
 string[] modeLabels = { "SInput", "XInput", "Slippi" };
 string[] modeTrayLabels = { "SInput (Steam)", "XInput", "Slippi (GameCube adapter)" };
 
-// Tray menu item IDs: the report rates, then ten per gamepad for its modes
-const int TrayRateBase = 100, TrayModeBase = 1000;
+// Tray menu item IDs: the report rates, then a block per gamepad for its modes
+const int TrayRateBase = 100, TrayModeBase = 1000, TrayModesPerPad = 10;
 
 // The tray menu as last given to the window, and the gamepads its mode items stand for
 string trayKey = "";
@@ -31,7 +34,7 @@ if (!firstCopy)
 
 // --tray: started with Windows, so it starts hidden in the notification area
 bool startHidden = args.Contains("--tray");
-if (!NativeUi.Open("HHL Gamepad Link", 620, 480, startHidden))
+if (!NativeUi.Open(AppName, WindowWidth, WindowHeight, startHidden))
     return 1;
 Autostart.AdoptOldTask();
 bool startWithWindows = Autostart.IsOn();
@@ -59,48 +62,31 @@ var driverReady = Task.Run(() =>
 LinkHub? hub = null;
 ConfigServer? config = null;
 var drivers = new Drivers(ctx, () => hub);
-drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask; // Installed from the Drivers window
+// Installed from the Drivers window
+drivers.ControllerDriverInstalled += () => driverReady = Task.CompletedTask;
 
 NativeUi.Frame frame;
 while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
 {
     if (hub == null && driverReady.IsCompleted)
-    {
-        if (driverReady.IsFaulted)
-            message = $"The driver didn't install: {driverReady.Exception!.InnerException!.Message}";
-        else
-        {
-            hub = new LinkHub(ctx, rates[rateIndex]);
-            message = "Ready";
-            try { config = new ConfigServer(hub); }
-            catch (Exception e) { message = $"Ready (config app link unavailable: {e.Message})"; }
-        }
-    }
+        StartHub();
 
     UpdateTray();
-    int pick = NativeUi.TakeTrayChoice();
-    if (pick >= TrayModeBase && (pick - TrayModeBase) / 10 < trayPads.Count)
-        hub?.SetMode(trayPads[(pick - TrayModeBase) / 10], modeFormats[(pick - TrayModeBase) % 10]);
-    else if (pick >= TrayRateBase && pick < TrayRateBase + rates.Length)
-    {
-        rateIndex = pick - TrayRateBase;
-        hub?.SetRate(rates[rateIndex]);
-    }
+    ApplyTrayChoice(NativeUi.TakeTrayChoice());
 
     // Hidden in the tray: the gamepads keep running, there is just nothing to draw
     if (frame == NativeUi.Frame.Hidden)
         continue;
 
-    int chosen = NativeUi.RateHeader("HHL Gamepad Link", "Report rate", rateLabels, rateIndex);
+    int chosen = NativeUi.RateHeader(AppName, "Report rate", rateLabels, rateIndex);
     if (chosen != rateIndex)
-    {
-        rateIndex = chosen;
-        hub?.SetRate(rates[rateIndex]);
-    }
+        SetRate(chosen);
 
     var pads = hub?.Snapshot() ?? Array.Empty<PadEntry>();
     if (pads.Count == 0)
-        NativeUi.Empty(hub == null ? "Starting…" : "Waiting for gamepads in Link mode. Pair one as “<name> Link” in Bluetooth settings.");
+        NativeUi.Empty(hub == null
+            ? "Starting…"
+            : "Waiting for gamepads in Link mode. Pair one as “<name> Link” in Bluetooth settings.");
 
     foreach (var pad in pads)
         DrawCard(pad);
@@ -134,29 +120,54 @@ hub?.Dispose();
 ctx.Dispose();
 return 0;
 
+// The driver is ready (or failed): the gamepads can come
+void StartHub()
+{
+    if (driverReady.IsFaulted)
+    {
+        message = $"The driver didn't install: {driverReady.Exception!.InnerException!.Message}";
+        Log.Write($"Driver: {driverReady.Exception!.InnerException}");
+        return;
+    }
+    hub = new LinkHub(ctx, rates[rateIndex]);
+    message = "Ready";
+    try { config = new ConfigServer(hub); }
+    catch (Exception e)
+    {
+        message = $"Ready (config app link unavailable: {e.Message})";
+        Log.Write($"Config app link: {e}");
+    }
+}
+
+void SetRate(int index)
+{
+    rateIndex = index;
+    hub?.SetRate(rates[rateIndex]);
+}
+
 // The mode a session's gamepad is in (or is being put in), as an index into modeFormats
 int ModeIndex(PadSession session) => Array.IndexOf(modeFormats, session.WantedFormat ?? session.Format);
 
 // The tray menu's own items: the report rate, and each gamepad open here with its mode
 void UpdateTray()
 {
-    var items = new List<NativeUi.TrayItem> { new("Report rate", 0, 4) };
+    var items = new List<NativeUi.TrayItem> { new("Report rate", 0, NativeUi.TraySubmenuStart) };
     for (int i = 0; i < rates.Length; i++)
-        items.Add(new(rateLabels[i], TrayRateBase + i, i == rateIndex ? 1 : 0));
-    items.Add(new("", 0, 8));
+        items.Add(new(rateLabels[i], TrayRateBase + i, i == rateIndex ? NativeUi.TrayChecked : 0));
+    items.Add(new("", 0, NativeUi.TraySubmenuEnd));
 
     var pads = new List<string>();
     foreach (var e in hub?.Snapshot() ?? Array.Empty<PadEntry>())
     {
         if (e.Session is not { State: not SessionState.Closed } session)
             continue;
-        int slot = pads.Count;
+        int firstId = TrayModeBase + pads.Count * TrayModesPerPad;
         pads.Add(e.Pad.Id);
-        items.Add(new(e.Pad.Title, 0, 4));
+        items.Add(new(e.Pad.Name, 0, NativeUi.TraySubmenuStart));
         int current = ModeIndex(session);
         for (int m = 0; m < modeFormats.Length; m++)
-            items.Add(new(modeTrayLabels[m], TrayModeBase + slot * 10 + m, m == current ? 1 : 0));
-        items.Add(new("", 0, 8));
+            items.Add(new(modeTrayLabels[m], firstId + m, m == current ? NativeUi.TrayChecked : 0));
+        items.Add(new("", 0, NativeUi.TraySubmenuEnd));
     }
 
     string key = string.Join("|", items);
@@ -167,83 +178,89 @@ void UpdateTray()
     NativeUi.SetTrayItems(items);
 }
 
+// A pick from the tray menu: a gamepad's mode, or the report rate
+void ApplyTrayChoice(int pick)
+{
+    int slot = (pick - TrayModeBase) / TrayModesPerPad;
+    if (pick >= TrayModeBase && slot < trayPads.Count)
+        hub?.SetMode(trayPads[slot], modeFormats[(pick - TrayModeBase) % TrayModesPerPad]);
+    else if (pick >= TrayRateBase && pick < TrayRateBase + rates.Length)
+        SetRate(pick - TrayRateBase);
+}
+
 void DrawCard(PadEntry e)
 {
     var session = e.Session;
     bool here = session is { State: not SessionState.Closed };
-    string mode = Protocol.FormatName(e.Pad.Format);
     // With a user name set in the config app, it is the title and the model goes on the details line
-    string title = e.UserName.Length > 0 ? e.UserName : e.Pad.Title;
+    string title = e.UserName.Length > 0 ? e.UserName : e.Pad.Name;
+    var look = CardLook(e, here);
+
+    // A gamepad open here gets a mode picker
+    var (clicked, picked) = NativeUi.Card(e.Pad.Id, title, look.Detail, look.Status, look.Colour,
+                                          look.Button, look.Accent, here ? modeLabels : null,
+                                          here ? ModeIndex(session!) : -1);
+    if (picked is int m)
+        hub!.SetMode(e.Pad.Id, modeFormats[m]);
+    if (!clicked)
+        return;
+    if (here)
+        hub!.Close(e.Pad.Id);
+    else if (e.Nearby != null && e.Known)
+        hub!.Call(e.Pad.Id);
+    else if (e.Nearby != null)
+        hub!.Pair(e.Pad.Id);
+    else
+        hub!.Forget(e.Pad.Id);
+}
+
+// What a card says, and its button, for where its gamepad is
+(string Status, NativeUi.Status Colour, string Button, bool Accent, string Detail)
+    CardLook(PadEntry e, bool here)
+{
+    string mode = Protocol.FormatName(e.Pad.Format);
     string model = e.UserName.Length > 0 ? $"{e.Pad.Name}  ·  " : "";
 
-    string status, button, detail;
-    NativeUi.Status colour;
-    bool accent;
     if (!here && e.Nearby != null && e.Known)
     {
         // Linked here before, connected somewhere else, and close by: it can be called over
-        status = "Nearby";
-        colour = NativeUi.Status.Free;
-        button = "Use here";
-        accent = true;
-        detail = $"{model}{mode} on another device  ·  {e.Call ?? "Use here calls it over"}";
+        return ("Nearby", NativeUi.Status.Free, "Use here", true,
+                $"{model}{mode} on another device  ·  {e.Call ?? "Use here calls it over"}");
     }
-    else if (!here && e.Nearby != null)
+    if (!here && e.Nearby != null)
     {
-        // Close by and not paired with this PC: pair it (confirmed with its pairing combo)
-        status = "New";
-        colour = NativeUi.Status.Free;
-        button = "Pair";
-        accent = true;
-        detail = $"{model}{mode}  ·  {e.Call ?? (e.Nearby.Linked ? "linked to another PC; Pair adds this one" : "Pair sets it up here")}";
+        // Close by and not paired with this PC: pair it
+        string hint = e.Nearby.Linked ? "linked to another PC; Pair adds this one" : "Pair sets it up here";
+        return ("New", NativeUi.Status.Free, "Pair", true, $"{model}{mode}  ·  {e.Call ?? hint}");
     }
-    else if (e.Away)
+    if (e.Away)
     {
-        status = "Disconnected";
-        colour = NativeUi.Status.Problem;
-        button = "Forget";
-        accent = false;
-        detail = $"{mode}  ·  reconnects when it's back";
+        return ("Disconnected", NativeUi.Status.Problem, "Forget", false,
+                $"{mode}  ·  reconnects when it's back");
     }
-    else if (here)
+    if (here)
     {
-        bool live = session!.State == SessionState.Open;
-        status = live ? "Open here" : session.Status;
-        colour = session.Problem != null ? NativeUi.Status.Problem : NativeUi.Status.OpenHere;
-        button = "Disconnect";
-        accent = false;
-        string port = session.AdapterPort is int n ? $"  ·  adapter port {n}" : "";
-        detail = session.Problem != null ? $"{mode}  ·  {session.Problem}"
-            : live ? $"{mode}{port}  ·  {session.PacketsPerSecond}/s in" +
-                     (session.AdapterPort == null ? $", {session.ReportsPerSecond} Hz out" : "") + "  ·  " +
-                     $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late"
-            : mode;
+        var session = e.Session!;
+        bool live = session.State == SessionState.Open;
+        var colour = session.Problem != null ? NativeUi.Status.Problem : NativeUi.Status.OpenHere;
+        return (live ? "Open here" : session.Status, colour, "Disconnect", false,
+                OpenDetail(session, mode, live));
     }
-    else
-    {
-        // Disconnected here: handed back. It looks for a dongle, and comes back here when it is next
-        // started in dongle mode (a gamepad only calls this PC as it starts)
-        status = e.Refused ? "Releasing…" : "Released";
-        colour = NativeUi.Status.Free;
-        button = "Forget";
-        accent = false;
-        detail = $"{mode}  ·  back on a dongle; start it in dongle mode to use it here";
-    }
+    // Disconnected here: handed back. It looks for a dongle, and comes back here when it is next
+    // started in dongle mode (a gamepad only calls this PC as it starts)
+    return (e.Refused ? "Releasing…" : "Released", NativeUi.Status.Free, "Forget", false,
+            $"{mode}  ·  back on a dongle; start it in dongle mode to use it here");
+}
 
-    // A gamepad open here gets a mode picker
-    var (clicked, picked) = NativeUi.Card(e.Pad.Id, title, detail, status, colour, 0, button, accent,
-        here ? modeLabels : null, here ? ModeIndex(session!) : -1);
-    if (picked is int m)
-        hub!.SetMode(e.Pad.Id, modeFormats[m]);
-    if (clicked)
-    {
-        if (here)
-            hub!.Close(e.Pad.Id);
-        else if (e.Nearby != null && e.Known)
-            hub!.Call(e.Pad.Id);
-        else if (e.Nearby != null)
-            hub!.Pair(e.Pad.Id);
-        else
-            hub!.Forget(e.Pad.Id);
-    }
+// An open gamepad's details line: its problem, or once it is live, its rates and buffer
+string OpenDetail(PadSession session, string mode, bool live)
+{
+    if (session.Problem != null)
+        return $"{mode}  ·  {session.Problem}";
+    if (!live)
+        return mode;
+    string port = session.AdapterPort is int n ? $"  ·  adapter port {n}" : "";
+    string output = session.AdapterPort == null ? $", {session.ReportsPerSecond} Hz out" : "";
+    return $"{mode}{port}  ·  {session.PacketsPerSecond}/s in{output}  ·  " +
+           $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late";
 }

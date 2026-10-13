@@ -17,6 +17,8 @@ namespace HhlGamepadLink;
 sealed class ConfigServer : IDisposable
 {
     public const int Port = 51702;
+    const int PacketBytes = 64;        // A WebUSB packet
+    const int QueuedToApp = 256;       // Packets from the gamepad waiting for the socket
 
     static readonly string[] AllowedOrigins = { "https://handheldlegend.github.io" };
 
@@ -100,7 +102,7 @@ sealed class ConfigServer : IDisposable
     {
         var open = _hub.Snapshot().Where(e => e.Session is { State: SessionState.Open });
         return "[" + string.Join(",", open.Select(e =>
-            $"{{\"id\":\"{e.Pad.Id}\",\"name\":\"{Escape(e.Pad.Name)}\",\"title\":\"{Escape(e.Pad.Title)}\"," +
+            $"{{\"id\":\"{e.Pad.Id}\",\"name\":\"{Escape(e.Pad.Name)}\",\"title\":\"{Escape(e.Pad.Name)}\"," +
             $"\"mode\":\"{Protocol.FormatName(e.Pad.Format)}\"}}")) + "]";
     }
 
@@ -118,7 +120,7 @@ sealed class ConfigServer : IDisposable
         }
 
         var ws = (await http.AcceptWebSocketAsync(subProtocol: null)).WebSocket;
-        var toApp = Channel.CreateBounded<byte[]>(256);
+        var toApp = Channel.CreateBounded<byte[]>(QueuedToApp);
         void Forward(byte[] packet) => toApp.Writer.TryWrite(packet);
         session.ConfigFromGamepad += Forward;
 
@@ -130,7 +132,7 @@ sealed class ConfigServer : IDisposable
 
         try
         {
-            var buffer = new byte[64];
+            var buffer = new byte[PacketBytes];
             while (ws.State == WebSocketState.Open && session.State != SessionState.Closed)
             {
                 var got = await ws.ReceiveAsync(buffer, _stop.Token);
@@ -146,7 +148,8 @@ sealed class ConfigServer : IDisposable
         {
             session.ConfigFromGamepad -= Forward;
             toApp.Writer.TryComplete();
-            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); } catch { }
+            try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None); }
+            catch { }
             ws.Dispose();
         }
         await sender.ContinueWith(_ => { });

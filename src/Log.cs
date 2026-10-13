@@ -1,24 +1,26 @@
 // Errors worth keeping, in %LOCALAPPDATA%\HHL Gamepad Link\log.txt: what a gamepad's session or the
-// app itself hit, so a report can come with it. Kept short: it starts again past 256 KB.
+// app itself hit, so a report can come with it. Kept short: it starts again past MaxBytes.
 
 namespace HhlGamepadLink;
 
 static class Log
 {
-    static readonly string FilePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HHL Gamepad Link", "log.txt");
-    static readonly object Lock = new();
+    const long MaxBytes = 256 * 1024;
+
+    static readonly string FilePath = Path.Combine(Settings.Folder, "log.txt");
+    static readonly object _lock = new();
 
     public static void Write(string text)
     {
-        lock (Lock)
+        lock (_lock)
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                if (File.Exists(FilePath) && new FileInfo(FilePath).Length > 256 * 1024)
+                Directory.CreateDirectory(Settings.Folder);
+                if (File.Exists(FilePath) && new FileInfo(FilePath).Length > MaxBytes)
                     File.Delete(FilePath);
-                File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {text}{Environment.NewLine}");
+                string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {text}{Environment.NewLine}";
+                File.AppendAllText(FilePath, line);
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }

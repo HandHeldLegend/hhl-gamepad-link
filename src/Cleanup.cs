@@ -19,7 +19,9 @@ static class Cleanup
         {
             using var s = new X509Store(store, StoreLocation.LocalMachine);
             s.Open(OpenFlags.ReadWrite);
-            foreach (var cert in s.Certificates.Find(X509FindType.FindBySubjectDistinguishedName, CertificateSubject, false))
+            var certs = s.Certificates.Find(X509FindType.FindBySubjectDistinguishedName, CertificateSubject,
+                                            validOnly: false);
+            foreach (var cert in certs)
                 s.Remove(cert);
         }
 

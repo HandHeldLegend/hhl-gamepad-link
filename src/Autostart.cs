@@ -14,6 +14,7 @@ static class Autostart
 {
     const string TaskName = "HHL Gamepad Link";
     const string OldTaskName = "HHL Gamepad WLAN"; // The app's name up to 0.1
+    const int SchtasksWaitMs = 10_000;
 
     // A Start with Windows task from before the rename becomes this one
     public static void AdoptOldTask()
@@ -41,7 +42,9 @@ static class Autostart
               <RegistrationInfo>
                 <Description>HHL Gamepad Link: HOJA gamepads over Bluetooth</Description>
               </RegistrationInfo>
-              <Triggers><LogonTrigger><UserId>{SecurityElement.Escape(user)}</UserId></LogonTrigger></Triggers>
+              <Triggers>
+                <LogonTrigger><UserId>{SecurityElement.Escape(user)}</UserId></LogonTrigger>
+              </Triggers>
               <Principals>
                 <Principal id="Author">
                   <UserId>{SecurityElement.Escape(user)}</UserId>
@@ -84,7 +87,7 @@ static class Autostart
             RedirectStandardError = true,
         };
         using var p = Process.Start(start)!;
-        p.WaitForExit(10_000);
+        p.WaitForExit(SchtasksWaitMs);
         return p.HasExited ? p.ExitCode : -1;
     }
 }
