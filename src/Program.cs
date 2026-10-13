@@ -109,11 +109,14 @@ while ((frame = NativeUi.BeginFrame()) != NativeUi.Frame.Closed)
         : $"Up to date · v{Updates.Current}";
     var action = NativeUi.FooterBar(Drivers.Working ?? message, ref startWithWindows, ref closeToTray,
                                     Updates.Status, updateText);
+    bool quit = action.HasFlag(NativeUi.FooterAction.Quit);
     if (action.HasFlag(NativeUi.FooterAction.OpenDrivers))
         drivers.Refresh();
     if (NativeUi.DriversWindow(drivers.Rows, drivers.Note) is var (row, remove))
         drivers.Act((Drivers.Which)row, remove);
     NativeUi.End();
+    if (quit)
+        break;
 
     Settings.SetCloseToTray(closeToTray);
     if (action.HasFlag(NativeUi.FooterAction.OpenUpdate))
@@ -262,15 +265,16 @@ void DrawCard(PadEntry e)
     }
     if (e.Away)
     {
+        string last = e.Pad.Format == Protocol.FormatNone ? "" : $"{mode}  ·  ";
         return ("Disconnected", NativeUi.Status.Problem, "Forget", false,
-                $"{mode}  ·  reconnects when it's back");
+                $"{model}{last}reconnects when it's back");
     }
     if (here)
     {
         var session = e.Session!;
         bool live = session.State == SessionState.Open;
         var colour = session.Problem != null ? NativeUi.Status.Problem : NativeUi.Status.OpenHere;
-        return (live ? "Open here" : session.Status, colour, "Disconnect", false,
+        return (live ? "Open" : session.Status, colour, "Disconnect", false,
                 OpenDetail(session, mode, live));
     }
     // Disconnected here: handed back. It looks for a dongle, and comes back here when it is next
@@ -279,7 +283,7 @@ void DrawCard(PadEntry e)
             $"{mode}  ·  back on a dongle; start it in dongle mode to use it here");
 }
 
-// An open gamepad's details line: its problem, or once it is live, its rates and buffer
+// An open gamepad's details line: its problem, or once it is live, its rates
 string OpenDetail(PadSession session, string mode, bool live)
 {
     if (session.Problem != null)
@@ -288,6 +292,5 @@ string OpenDetail(PadSession session, string mode, bool live)
         return mode;
     string port = session.AdapterPort is int n ? $"  ·  adapter port {n}" : "";
     string output = session.AdapterPort == null ? $", {session.ReportsPerSecond} Hz out" : "";
-    return $"{mode}{port}  ·  {session.PacketsPerSecond}/s in{output}  ·  " +
-           $"{session.BufferMs:F0} ms buffer, {session.LatePercent:F1}% late";
+    return $"{mode}{port}  ·  {session.PacketsPerSecond}/s in{output}";
 }

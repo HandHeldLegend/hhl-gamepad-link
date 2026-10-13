@@ -633,16 +633,21 @@ extern "C" int ui_footer(const char *message, int *start_with_windows, int *clos
     g_close_to_tray = to_tray;
     ImGui::PopStyleColor(3);
 
-    const char *label = "Drivers";
-    const float w = ImGui::CalcTextSize(label).x + st.FramePadding.x * 2;
-    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - w);
+    // Drivers, then Quit, on the right: quiet buttons
+    const char *drivers = "Drivers", *quit = "Quit";
+    const float drivers_w = ImGui::CalcTextSize(drivers).x + st.FramePadding.x * 2;
+    const float quit_w = ImGui::CalcTextSize(quit).x + st.FramePadding.x * 2;
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - quit_w - st.ItemSpacing.x - drivers_w);
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
-    if (ImGui::Button(label))
+    if (ImGui::Button(drivers))
     {
         ImGui::OpenPopup("Drivers");
         result |= 1;
     }
+    ImGui::SameLine();
+    if (ImGui::Button(quit))
+        result |= 16;
     ImGui::PopStyleColor(2);
     return result;
 }

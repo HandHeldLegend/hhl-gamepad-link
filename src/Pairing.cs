@@ -151,6 +151,9 @@ static unsafe partial class Pairing
     static uint Authenticate(ref DeviceInfo info) =>
         BluetoothAuthenticateDeviceEx(0, 0, ref info, 0, MitmNotRequiredGeneralBonding);
 
+    // Windows' pairing for this address (as shown), removed
+    public static void Remove(string address) => Forget(Convert.ToUInt64(address, 16));
+
     // A pairing left from before (the gamepad forgot it, or a new descriptor) can't be reused
     static void Forget(ulong addr)
     {

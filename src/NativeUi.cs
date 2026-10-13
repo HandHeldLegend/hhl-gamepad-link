@@ -16,7 +16,10 @@ static partial class NativeUi
     public enum Frame { Closed = 0, Draw = 1, Hidden = 2 }
 
     [Flags]
-    public enum FooterAction { None = 0, OpenDrivers = 1, StartWithWindowsChanged = 4, OpenUpdate = 8 }
+    public enum FooterAction
+    {
+        None = 0, OpenDrivers = 1, StartWithWindowsChanged = 4, OpenUpdate = 8, Quit = 16,
+    }
 
     // A row of the Drivers window
     public sealed record DriverRow(string Name, string Detail, string State, bool Installed, bool Busy,

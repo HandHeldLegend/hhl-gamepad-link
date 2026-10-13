@@ -32,7 +32,6 @@ sealed class LinkHub : IDisposable
     readonly Dictionary<string, LinkDevice> _devices = new();   // Open collections, by path
     readonly Dictionary<string, PadSession> _sessions = new();  // By gamepad (Link address)
     readonly HashSet<string> _refused = new();                  // Disconnected here, until they go quiet
-    readonly Dictionary<string, byte> _modes = new();           // Picked here this run, by gamepad
     readonly HashSet<string> _pairing = new();                  // Being paired now
     HashSet<string> _windowsPaired = new();                     // Known gamepads Windows holds a pairing for
 
@@ -61,9 +60,14 @@ sealed class LinkHub : IDisposable
             var entries = _sessions.Values.Where(s => s.Pad != null).Select(SessionEntry).ToList();
             // Gamepads advertising nearby that aren't here this run: linked here before (call them
             // over), or not (pair them)
-            foreach (var (id, seen) in _caller.Nearby(NearbyFor))
+            var nearby = _caller.Nearby(NearbyFor);
+            foreach (var (id, seen) in nearby)
                 if (!_sessions.ContainsKey(id))
                     entries.Add(NearbyEntry(id, seen));
+            // Known gamepads neither here nor nearby: listed as disconnected, so they can be forgotten
+            foreach (var known in KnownPads.All())
+                if (!_sessions.ContainsKey(known.Id) && !nearby.Any(n => n.Id == known.Id))
+                    entries.Add(KnownEntry(known));
             return entries.OrderBy(e => e.UserName.Length > 0 ? e.UserName : e.Pad.Name)
                           .ThenBy(e => e.Pad.Id)
                           .ToList();
@@ -127,14 +131,15 @@ sealed class LinkHub : IDisposable
                 session.Close("Forgotten", CloseReason.Closed);
         }
         KnownPads.Forget(id);
+        Pairing.Remove(id); // As Windows' Remove device: pairing again sets it up afresh
     }
 
     // Put a gamepad in a mode for the rest of this run: now if it is here, and each time it comes back
     public void SetMode(string id, byte format)
     {
+        KnownPads.SetMode(id, format);
         lock (_lock)
         {
-            _modes[id] = format;
             if (_sessions.TryGetValue(id, out var session))
                 session.SetMode(format);
         }
@@ -190,12 +195,19 @@ sealed class LinkHub : IDisposable
                             known != null && _windowsPaired.Contains(s.Id), known?.UserName ?? "");
     }
 
+    PadEntry KnownEntry(KnownPads.Pad known)
+    {
+        var pad = new PadIdentity(known.Id, known.Name, 0, 0, known.Mode, ModeForced: false);
+        return new PadEntry(pad, null, Away: true, false, null, _caller.CallStatus(known.Id),
+                            _windowsPaired.Contains(known.Id), known.UserName);
+    }
+
     PadEntry NearbyEntry(string id, Caller.Sighting seen)
     {
         var known = KnownPads.Get(id);
         string name = seen.Name.Length > 0 ? seen.Name : known?.Name ?? "HOJA gamepad";
         string userName = seen.UserName.Length > 0 ? seen.UserName : known?.UserName ?? "";
-        var pad = new PadIdentity(id, name, 0, 0, seen.Format);
+        var pad = new PadIdentity(id, name, 0, 0, seen.Format, ModeForced: false);
         return new PadEntry(pad, null, false, false, seen, _caller.CallStatus(id),
                             known != null && _windowsPaired.Contains(id), userName);
     }
@@ -308,8 +320,9 @@ sealed class LinkHub : IDisposable
         if (!_sessions.TryGetValue(device.Id, out var session))
         {
             session = new PadSession(_ctx, _adapter, device.Id, ReportIntervalUs);
-            if (_modes.TryGetValue(device.Id, out byte format))
-                session.SetMode(format);
+            // The mode it was last used in here: it follows, unless its mode was chosen on it
+            if (KnownPads.Get(device.Id)?.Mode is byte mode && PadSession.IsPcMode(mode))
+                session.SetMode(mode);
             _sessions[device.Id] = session;
         }
         Guard(session, () => session.Attach(device));

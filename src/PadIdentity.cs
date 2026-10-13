@@ -6,9 +6,10 @@ using System.Text;
 
 namespace HhlGamepadLink;
 
-sealed record PadIdentity(string Id, string Name, ushort Vid, ushort Pid, byte Format)
+sealed record PadIdentity(string Id, string Name, ushort Vid, ushort Pid, byte Format, bool ModeForced)
 {
     const int WakeBytes = 64;
+    const byte FlagModeForced = 0x01; // DONGLE_WAKE_FLAG_MODE_FORCED: its mode was chosen on the gamepad
 
     // [session u16, mode in the low nibble][vid u16][pid u16][protocol][flags][firmware u32]
     // [name, 32][manufacturer, 20]
@@ -22,7 +23,8 @@ sealed record PadIdentity(string Id, string Name, ushort Vid, ushort Pid, byte F
             Name: Text(p.Slice(12, 32)),
             Vid: BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(2)),
             Pid: BinaryPrimitives.ReadUInt16LittleEndian(p.Slice(4)),
-            Format: Protocol.FormatFromMode((byte)(session & 0x0F)));
+            Format: Protocol.FormatFromMode((byte)(session & 0x0F)),
+            ModeForced: (p[7] & FlagModeForced) != 0);
     }
 
     // A fixed-size text field, ended by a zero when shorter

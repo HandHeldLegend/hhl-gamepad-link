@@ -1,13 +1,13 @@
 // Gamepads that have been in Link mode on this PC, kept between runs in
-// %LOCALAPPDATA%\HHL Gamepad Link\pads.ini (one "id=token|name|user name" line each): the call token
-// each one gave this app (so it can call the gamepad over from wherever it is connected), and its
-// names, for the list while it is elsewhere.
+// %LOCALAPPDATA%\HHL Gamepad Link\pads.ini (one "id=token|name|user name|mode" line each): the call
+// token each one gave this app (so it can call the gamepad over from wherever it is connected), its
+// names, for the list while it is elsewhere, and the mode it was last used in here.
 
 namespace HhlGamepadLink;
 
 static class KnownPads
 {
-    public sealed record Pad(string Id, byte[] Token, string Name, string UserName);
+    public sealed record Pad(string Id, byte[] Token, string Name, string UserName, byte Mode);
 
     static readonly string FilePath = Path.Combine(Settings.Folder, "pads.ini");
     static readonly object _lock = new();
@@ -33,7 +33,7 @@ static class KnownPads
             pads.TryGetValue(id, out var known);
             if (known != null && known.Name == name && known.Token.AsSpan().SequenceEqual(token))
                 return;
-            pads[id] = new Pad(id, token, name, known?.UserName ?? "");
+            pads[id] = new Pad(id, token, name, known?.UserName ?? "", known?.Mode ?? Protocol.FormatNone);
             Save(pads);
         }
     }
@@ -47,6 +47,19 @@ static class KnownPads
             if (!pads.TryGetValue(id, out var known) || known.UserName == userName)
                 return;
             pads[id] = known with { UserName = userName };
+            Save(pads);
+        }
+    }
+
+    // The mode a known gamepad was last used in here, when it changes
+    public static void SetMode(string id, byte mode)
+    {
+        lock (_lock)
+        {
+            var pads = Load();
+            if (!pads.TryGetValue(id, out var known) || known.Mode == mode)
+                return;
+            pads[id] = known with { Mode = mode };
             Save(pads);
         }
     }
@@ -88,20 +101,23 @@ static class KnownPads
         catch (UnauthorizedAccessException) { }
     }
 
-    // A line without a whole token is skipped; a missing name is the id
+    // A line without a whole token is skipped; a missing name is the id, a missing mode none
     static Pad? Parse(string line)
     {
         var kv = line.Split('=', 2);
         if (kv.Length != 2)
             return null;
-        var parts = kv[1].Split('|', 3);
+        var parts = kv[1].Split('|', 4);
         byte[] token;
         try { token = Convert.FromHexString(parts[0]); }
         catch (FormatException) { return null; }
         if (token.Length != Protocol.TokenLength)
             return null;
-        return new Pad(kv[0], token, parts.Length > 1 ? parts[1] : kv[0], parts.Length > 2 ? parts[2] : "");
+        byte mode = parts.Length > 3 && byte.TryParse(parts[3], out byte m) ? m : Protocol.FormatNone;
+        return new Pad(kv[0], token, parts.Length > 1 ? parts[1] : kv[0], parts.Length > 2 ? parts[2] : "",
+                       mode);
     }
 
-    static string Format(Pad p) => $"{p.Id}={Convert.ToHexString(p.Token)}|{p.Name}|{p.UserName}";
+    static string Format(Pad p) =>
+        $"{p.Id}={Convert.ToHexString(p.Token)}|{p.Name}|{p.UserName}|{p.Mode}";
 }

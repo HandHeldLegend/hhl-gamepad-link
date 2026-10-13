@@ -1,6 +1,6 @@
 // One gamepad in Link mode on this PC: tells it what this PC wants (mode and report rate, every
-// second, which also tells it the app is here), presents it as the device for its mode, and plays
-// its samples to that device at the spacing the gamepad took them (see Playout). In Slippi mode the
+// second, which also tells it the app is here), presents it as the device for its mode, and gives
+// its reports to that device as they arrive: no buffer, for the least delay. In Slippi mode the
 // device is a port on the GameCube adapter that every Slippi gamepad here shares (see GcAdapter).
 //
 // Threads: the device's reader thread calls OnReport and the hub's thread Heartbeat and Tick (all
@@ -8,7 +8,6 @@
 // the pump submits to the device; creating and removing the device run in the background, because
 // each takes seconds.
 
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using HIDMaestro;
 
@@ -33,7 +32,7 @@ sealed class PadSession
     // otherwise the next input can replace the reply before the host reads it
     const long ReplyHoldMs = 20;
 
-    const long ReplyPollUs = 1_000;  // The pump looks for command replies this often
+    const int PumpIdleMs = 100;      // The pump wakes on its own this often, with nothing to do
     const int MaxReportBytes = 64;   // A gamepad report: live input or a command reply
     const long RateWindowMs = 1000;
 
@@ -49,8 +48,9 @@ sealed class PadSession
     HMController? _device;
     byte _deviceFormat = Protocol.FormatNone;
     HMProfile? _deviceProfile;
-    readonly Playout<byte[]> _reports = new();          // Its input reports, as the device takes them
+    readonly ConcurrentQueue<byte[]> _inputs = new();   // Its input reports, until the pump takes them
     readonly ConcurrentQueue<byte[]> _oneShots = new(); // Command replies, each given to the host once
+    readonly AutoResetEvent _wake = new(false);         // A report or reply came: the pump runs
     bool _doubleSubmit; // HIDMaestro's HID driver hands the host every other frame; USB/IP devices don't
     GcAdapter.Port? _gcPort;
     volatile bool _pumping;
@@ -62,11 +62,6 @@ sealed class PadSession
     // host whenever it asks, so SDL never waits on the radio
     byte[]? _features;
     bool _featuresAsked;
-
-    // The gamepad's clock (32-bit microseconds), unwrapped
-    long _sampledBase;
-    uint _lastSampled;
-    bool _haveSampled;
 
     // Rates shown in the list
     int _packets, _submitted;
@@ -95,17 +90,9 @@ sealed class PadSession
     public int PacketsPerSecond { get; private set; }
     public int ReportsPerSecond { get; private set; }
     public int? AdapterPort => _gcPort?.Number;
-    public double BufferMs => Timing.DelayUs / 1000.0;
-    public double LatePercent => Timing.LateShare * 100;
 
     // The config app through ConfigServer: replies and the live view, as WebUSB packets
     public event Action<byte[]>? ConfigFromGamepad;
-
-    (long DelayUs, double LateShare) Timing => _deviceFormat switch
-    {
-        Protocol.FormatSlippi when _gcPort != null => (_gcPort.Samples.DelayUs, _gcPort.Samples.LateShare),
-        _ => (_reports.DelayUs, _reports.LateShare),
-    };
 
     public void Attach(LinkDevice link)
     {
@@ -185,10 +172,7 @@ sealed class PadSession
             case Protocol.ReportLive:
                 // [seq u16][sampled_us u32][length u8][report]
                 if (report.Length >= 8 && Pad != null && State != SessionState.Closed)
-                {
-                    uint sampled = BinaryPrimitives.ReadUInt32LittleEndian(report.AsSpan(3));
-                    OnInput(sampled, report.AsSpan(7), arrivalUs);
-                }
+                    OnInput(report.AsSpan(7), arrivalUs);
                 break;
 
             case Protocol.ReportMessage:
@@ -251,55 +235,65 @@ sealed class PadSession
             Status = "Starting…";
         }
         Send(Protocol.LaneStatus, Protocol.Status(1)); // Adopted, as player 1
-        if (pad.Format is not (Protocol.FormatSInput or Protocol.FormatXInput or Protocol.FormatSlippi))
-            Fail("Can't open", $"{Protocol.FormatName(pad.Format)} mode isn't supported on a PC");
+        if (IsPcMode(pad.Format))
+            KnownPads.SetMode(Id, pad.Format); // Asked for again next time
+        else
+            LeaveConsoleMode(pad);
     }
 
-    // A live input report: [length][report], sampled at the gamepad's time
-    void OnInput(uint sampled, ReadOnlySpan<byte> lengthAndReport, long arrivalUs)
+    public static bool IsPcMode(byte format) =>
+        format is Protocol.FormatSInput or Protocol.FormatXInput or Protocol.FormatSlippi;
+
+    // A console mode (Switch, Wii...) has no device on a PC: ask it for SInput, or the mode picked
+    // for it here. It follows unless its mode was chosen on the gamepad itself.
+    void LeaveConsoleMode(PadIdentity pad)
+    {
+        string mode = Protocol.FormatName(pad.Format);
+        if (pad.ModeForced)
+        {
+            Fail("Can't open", $"{mode} mode was chosen on the gamepad: start it in a PC mode " +
+                               "(SInput, XInput or Slippi)");
+            return;
+        }
+        if (!IsPcMode(_wantedFormat))
+            SetMode(Protocol.FormatSInput);
+        Status = $"Switching from {mode} to {Protocol.FormatName(_wantedFormat)}…";
+    }
+
+    // A live input report: [length][report]
+    void OnInput(ReadOnlySpan<byte> lengthAndReport, long arrivalUs)
     {
         int length = lengthAndReport[0];
         if (Pad == null || length > MaxReportBytes || lengthAndReport.Length - 1 < length)
             return;
         var report = lengthAndReport.Slice(1, length).ToArray();
-        long sampledUs = Unwrap(sampled);
         _packets++;
 
         switch (Format)
         {
             case Protocol.FormatXInput:
-                OnXInput(report, arrivalUs, sampledUs);
+                OnXInput(report);
                 break;
 
             case Protocol.FormatSInput:
-                OnSInput(report, arrivalUs, sampledUs);
+                OnSInput(report);
                 break;
 
             case Protocol.FormatSlippi:
-                OnSlippi(report, arrivalUs, sampledUs);
+                OnSlippi(report, arrivalUs);
                 break;
         }
     }
 
-    // The gamepad's 32-bit clock as one that doesn't wrap
-    long Unwrap(uint sampled)
-    {
-        if (_haveSampled && sampled < _lastSampled && _lastSampled - sampled > 0x80000000u)
-            _sampledBase += 1L << 32;
-        _lastSampled = sampled;
-        _haveSampled = true;
-        return _sampledBase + sampled;
-    }
-
-    void OnXInput(byte[] report, long arrivalUs, long sampledUs)
+    void OnXInput(byte[] report)
     {
         if (_deviceFormat == Protocol.FormatNone)
             StartDevice(_ctx.GetProfile(XInputProfile)!, Protocol.FormatXInput, firstReport: null);
         if (_deviceProfile != null && report.Length >= XInputReportSize)
-            _reports.Add(arrivalUs, sampledUs, report[..XInputReportSize]);
+            GiveInput(report[..XInputReportSize]);
     }
 
-    void OnSInput(byte[] report, long arrivalUs, long sampledUs)
+    void OnSInput(byte[] report)
     {
         if (_features == null && !_featuresAsked)
         {
@@ -310,10 +304,16 @@ sealed class PadSession
         if (_deviceFormat == Protocol.FormatNone && _features != null)
             StartDevice(Personas.SInput(Pad!), Protocol.FormatSInput, firstReport: _features);
         if (report.Length > 0)
-            _reports.Add(arrivalUs, sampledUs, report);
+            GiveInput(report);
     }
 
-    void OnSlippi(byte[] report, long arrivalUs, long sampledUs)
+    void GiveInput(byte[] report)
+    {
+        _inputs.Enqueue(report);
+        _wake.Set();
+    }
+
+    void OnSlippi(byte[] report, long arrivalUs)
     {
         if (_deviceFormat == Protocol.FormatNone)
         {
@@ -324,7 +324,7 @@ sealed class PadSession
             else
                 Status = "Creating the adapter…";
         }
-        _gcPort?.Add(arrivalUs, sampledUs, report);
+        _gcPort?.Add(arrivalUs, report);
     }
 
     // An input report that had to arrive: a command reply, given to the host once
@@ -336,6 +336,7 @@ sealed class PadSession
             return;
         }
         _oneShots.Enqueue(report.ToArray());
+        _wake.Set();
     }
 
     // A port on the adapter is open once the adapter is there
@@ -427,10 +428,11 @@ sealed class PadSession
             _device = null;
             _deviceFormat = Protocol.FormatNone;
             _deviceProfile = null;
-            _reports.Clear();
+            _inputs.Clear();
             _oneShots.Clear();
         }
         _pumping = false;
+        _wake.Set();
         _gcPort?.Leave();
         _gcPort = null;
         Problem = null;
@@ -473,6 +475,7 @@ sealed class PadSession
         if (Personas.IsFeatureRequest(report) && _features != null)
         {
             _oneShots.Enqueue(_features); // Answered from the handshake
+            _wake.Set();
             return;
         }
         SendOutput(report);
@@ -482,17 +485,18 @@ sealed class PadSession
     void SendOutput(byte[] report) =>
         Send(Protocol.LaneMessage, Protocol.Message(Protocol.MsgOutput, report));
 
-    // Command replies go to the host at once; samples when their time comes
     void StartPump()
     {
         _pumping = true;
-        new Thread(Pump) { IsBackground = true, Priority = ThreadPriority.Highest, Name = $"Playout {Id}" }
+        new Thread(Pump) { IsBackground = true, Priority = ThreadPriority.Highest, Name = $"Pump {Id}" }
             .Start();
     }
 
+    // Woken as a report or reply arrives, the pump gives it to the device at once. Of several input
+    // reports waiting, only the newest goes: the host would read the newest anyway, and on USB/IP a
+    // waiting stale report would only hold the new one back.
     void Pump()
     {
-        using var timer = new PeriodicClock();
         long holdInputUntilUs = 0;
         long quietUntilUs = _deviceFormat == Protocol.FormatXInput
             ? PeriodicClock.NowUs + XInputQuietStartMs * 1000
@@ -500,9 +504,8 @@ sealed class PadSession
         while (_pumping)
         {
             long nowUs = PeriodicClock.NowUs;
-            long wakeUs = Math.Max(Math.Min(_reports.NextDueUs(), nowUs + ReplyPollUs), holdInputUntilUs);
-            if (wakeUs > nowUs)
-                timer.WaitUntilUs(wakeUs);
+            long heldUs = holdInputUntilUs - nowUs;
+            _wake.WaitOne(heldUs > 0 ? (int)((heldUs + 999) / 1000) : PumpIdleMs);
             nowUs = PeriodicClock.NowUs;
 
             lock (_submitLock)
@@ -511,21 +514,37 @@ sealed class PadSession
                     continue;
                 if (nowUs < quietUntilUs)
                 {
-                    while (_reports.TryTakeDue(nowUs, out _)) { } // Dropped, not saved for later
+                    _inputs.Clear(); // Dropped, not saved for later
                     continue;
                 }
                 if (_oneShots.TryDequeue(out var reply))
                 {
                     Submit(_device, reply);
                     holdInputUntilUs = nowUs + ReplyHoldMs * 1000;
+                    if (!_oneShots.IsEmpty)
+                        _wake.Set();
+                    continue;
                 }
-                else if (nowUs >= holdInputUntilUs && _reports.TryTakeDue(nowUs, out var input))
+                if (TakeNewestInput() is byte[] input)
                 {
-                    Submit(_device, input);
-                    _submitted++;
+                    if (nowUs < holdInputUntilUs)
+                        _inputs.Enqueue(input); // Waits out the reply's hold
+                    else
+                    {
+                        Submit(_device, input);
+                        _submitted++;
+                    }
                 }
             }
         }
+    }
+
+    byte[]? TakeNewestInput()
+    {
+        byte[]? newest = null;
+        while (_inputs.TryDequeue(out var input))
+            newest = input;
+        return newest;
     }
 
     // Under _submitLock. HIDMaestro's HID driver hands the host every other frame, so there each

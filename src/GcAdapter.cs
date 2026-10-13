@@ -45,18 +45,17 @@ sealed class GcAdapter : IDisposable
             SendToGamepad = sendToGamepad;
         }
 
-        public Playout<byte[]> Samples { get; } = new();
         public int Number { get; }  // 1 to 4, as Dolphin numbers them
         public bool Ready => _adapter._device != null;
         public bool Installing => _adapter._installing;
         public string? Problem => _adapter._problem;
 
         // A report from the gamepad: an adapter's input report with the gamepad on port 1
-        public void Add(long arrivalUs, long sentUs, ReadOnlySpan<byte> report)
+        public void Add(long arrivalUs, ReadOnlySpan<byte> report)
         {
             if (report.Length >= 1 + PortBytes && report[0] == ReportInput)
             {
-                Samples.Add(arrivalUs, sentUs, report.Slice(1, PortBytes).ToArray());
+                Volatile.Write(ref Current, report.Slice(1, PortBytes).ToArray());
                 Volatile.Write(ref LastInputUs, arrivalUs);
             }
         }
@@ -272,16 +271,15 @@ sealed class GcAdapter : IDisposable
         }
     }
 
-    // A port's part of the report: its newest due sample, or at rest once its gamepad goes quiet
+    // A port's part of the report: its newest input, or at rest once its gamepad goes quiet
     static byte[] PortData(Port? port, long nowUs)
     {
         if (port == null)
             return Empty();
-        while (port.Samples.TryTakeDue(nowUs, out var sample))
-            port.Current = sample;
+        byte[] current = Volatile.Read(ref port.Current);
         long quietUs = nowUs - Volatile.Read(ref port.LastInputUs);
         return quietUs >= QuietUnplugUs ? Empty()
-             : quietUs >= QuietNeutralUs ? Neutral(port.Current[0])
-             : port.Current;
+             : quietUs >= QuietNeutralUs ? Neutral(current[0])
+             : current;
     }
 }
